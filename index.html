@@ -402,7 +402,7 @@ nav.bottom .icon{font-size:18px;}
     </div>
     <div class="brand-text">
       <h1>Daily Consumption</h1>
-      <div class="sub">Support Equipment Inventory · <span id="appVersion">v1.0</span></div>
+      <div class="sub">Support Equipment Inventory · <span id="appVersion">v1.1</span></div>
     </div>
   </div>
   <div class="field-row">
@@ -508,7 +508,7 @@ nav.bottom .icon{font-size:18px;}
     </div>
 
     <div style="text-align:center;margin-top:24px;padding-top:16px;border-top:1px solid var(--border);color:var(--text-dim);font-size:10.5px;font-family:'Poppins',monospace;">
-      Daily Consumption <span id="settingsAppVersion">v1.0</span>
+      Daily Consumption <span id="settingsAppVersion">v1.1</span>
     </div>
   </div>
 
@@ -579,7 +579,7 @@ window.storage = {
 // Bump this whenever a meaningful update is shipped, so anyone opening the
 // app can quickly tell whether they're on the latest version (visible in
 // the header and at the bottom of Settings).
-const APP_VERSION = 'v1.0';
+const APP_VERSION = 'v1.1';
 
 const DEFAULT_ITEMS = [
   {id:'byo_menu', name:'BYO Menu', unit:'pack (500pcs)', category:'misc'},
@@ -849,8 +849,30 @@ async function loadEntriesForDate(date){
   }
 }
 
-async function persistEntries(){
+async function persistEntries(itemIdsBeingSubmitted){
   try{
+    // Re-fetch the latest server-side state right before saving, and only
+    // overwrite the specific items we're actually submitting right now.
+    // Without this, if two staff members loaded the page around the same
+    // time and one of them submits first, the second submit would blindly
+    // overwrite the whole day's data with a stale in-memory copy — silently
+    // erasing the first person's entries. Merging on top of a fresh fetch
+    // avoids that "lost update" problem.
+    let latestEntries = {};
+    try{
+      const res = await withTimeout(window.storage.get(entryKey(), true), 6000);
+      latestEntries = res ? JSON.parse(res.value) : {};
+    }catch(e){
+      // If we can't fetch the latest state, fall back to what's already in
+      // memory rather than blocking the save entirely.
+      latestEntries = { ...state.entries };
+    }
+
+    (itemIdsBeingSubmitted || Object.keys(state.entries)).forEach(itemId=>{
+      if(state.entries[itemId]) latestEntries[itemId] = state.entries[itemId];
+    });
+    state.entries = latestEntries;
+
     const result = await window.storage.set(entryKey(), JSON.stringify(state.entries), true);
     if(!result) throw new Error('no result returned');
     return true;
@@ -873,10 +895,10 @@ async function submitAllDrafts(){
     };
   });
 
-  let ok = await persistEntries();
+  let ok = await persistEntries(draftIds);
   if(!ok){
     await new Promise(r=>setTimeout(r, 400));
-    ok = await persistEntries();
+    ok = await persistEntries(draftIds);
   }
 
   if(ok){
