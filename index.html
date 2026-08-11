@@ -669,16 +669,26 @@ async function fetchEntriesBatch(dates){
   const result = {};
   const concurrency = 4;
   let idx = 0;
+  async function fetchOne(dt){
+    // Retry once on failure — a timeout/hiccup is NOT the same thing as
+    // "this date genuinely has no data", so we shouldn't give up after
+    // a single failed attempt (that was causing inconsistent results
+    // between page loads/refreshes).
+    for(let attempt=0; attempt<2; attempt++){
+      try{
+        const res = await withTimeout(window.storage.get(entryKey(dt), true), 7000);
+        return res ? JSON.parse(res.value) : {};
+      }catch(e){
+        if(attempt===0) await new Promise(r=>setTimeout(r,300));
+      }
+    }
+    return {};
+  }
   async function worker(){
     while(idx < dates.length){
       const i = idx++;
       const dt = dates[i];
-      try{
-        const res = await withTimeout(window.storage.get(entryKey(dt), true), 7000);
-        result[dt] = res ? JSON.parse(res.value) : {};
-      }catch(e){
-        result[dt] = {};
-      }
+      result[dt] = await fetchOne(dt);
     }
   }
   const workers = Array.from({length: Math.min(concurrency, dates.length)}, () => worker());
@@ -792,11 +802,15 @@ async function loadEntriesForDate(date){
   // request. Only after it's done do we go hunt for the last submission date,
   // so that search doesn't compete with (and potentially starve out) the
   // request that actually matters most.
-  try{
-    const todayRes = await withTimeout(window.storage.get(entryKey(date), true), 6000);
-    state.entries = todayRes ? JSON.parse(todayRes.value) : {};
-  }catch(e){
-    state.entries = {};
+  state.entries = {};
+  for(let attempt=0; attempt<2; attempt++){
+    try{
+      const todayRes = await withTimeout(window.storage.get(entryKey(date), true), 6000);
+      state.entries = todayRes ? JSON.parse(todayRes.value) : {};
+      break;
+    }catch(e){
+      if(attempt===0) await new Promise(r=>setTimeout(r,300));
+    }
   }
 
   try{
