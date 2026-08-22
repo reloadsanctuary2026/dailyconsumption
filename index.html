@@ -408,7 +408,7 @@ nav.bottom .icon{font-size:18px;}
     </div>
     <div class="brand-text">
       <h1>Daily Consumption</h1>
-      <div class="sub">Support Equipment Inventory · <span id="appVersion">v1.4</span></div>
+      <div class="sub">Support Equipment Inventory · <span id="appVersion">v1.5</span></div>
     </div>
   </div>
   <div class="field-row">
@@ -514,7 +514,7 @@ nav.bottom .icon{font-size:18px;}
     </div>
 
     <div style="text-align:center;margin-top:24px;padding-top:16px;border-top:1px solid var(--border);color:var(--text-dim);font-size:10.5px;font-family:'Poppins',monospace;">
-      Daily Consumption <span id="settingsAppVersion">v1.4</span>
+      Daily Consumption <span id="settingsAppVersion">v1.5</span>
     </div>
   </div>
 
@@ -585,7 +585,7 @@ window.storage = {
 // Bump this whenever a meaningful update is shipped, so anyone opening the
 // app can quickly tell whether they're on the latest version (visible in
 // the header and at the bottom of Settings).
-const APP_VERSION = 'v1.4';
+const APP_VERSION = 'v1.5';
 
 const DEFAULT_ITEMS = [
   {id:'byo_menu', name:'BYO Menu', unit:'pack (500pcs)', category:'misc'},
@@ -748,6 +748,19 @@ async function loadThresholds(){
     const res = await withTimeout(window.storage.get('thresholds', true), 4000);
     state.thresholds = res ? JSON.parse(res.value) : {};
   }catch(e){ state.thresholds = {}; }
+}
+
+// Escapes user-typed text (item names, notes, staff names, etc.) before
+// it's inserted into innerHTML templates. Without this, someone typing
+// "<" or "&" in a Notes field could break the table layout, or worse.
+function escapeHtml(str){
+  if(str === undefined || str === null) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 function slugify(name, existingIds){
@@ -1011,7 +1024,7 @@ function renderInputView(){
     const collapsed = query ? false : state.collapsedCategories.has(cat.id);
     wrap.innerHTML = `
       <div class="category-header ${collapsed?'collapsed':''}" data-cat="${cat.id}">
-        <div class="name">${cat.name}</div>
+        <div class="name">${escapeHtml(cat.name)}</div>
         <div style="display:flex;align-items:center;gap:8px;">
           <span class="count-badge">${filledCount}/${catItems.length}</span>
           <span class="chevron-btn"><span class="chevron">▾</span></span>
@@ -1131,8 +1144,8 @@ function renderItemCard(item){
   card.innerHTML = `
     <div class="item-top">
       <div>
-        <div class="item-name">${item.name}</div>
-        <div class="item-unit">${item.unit}</div>
+        <div class="item-name">${escapeHtml(item.name)}</div>
+        <div class="item-unit">${escapeHtml(item.unit)}</div>
       </div>
       <div class="status-dot ${filled ? (pending?'pending':(low?'low':'ok')) : ''}"></div>
     </div>
@@ -1144,7 +1157,7 @@ function renderItemCard(item){
     </div>
     <div class="item-meta">
       <input type="text" inputmode="numeric" pattern="[0-9]*" class="stockin-input" placeholder="+ Stock In" value="${eff.stockIn||''}">
-      <input type="text" class="remarks-input" placeholder="Notes..." value="${eff.remarks||''}">
+      <input type="text" class="remarks-input" placeholder="Notes..." value="${escapeHtml(eff.remarks||'')}">
     </div>
     ${pending ? `<div class="pending-note">Not submitted yet</div>` : ''}
     ${state.thresholds[item.id] !== undefined ? `<div class="threshold-note">Min stock: ${state.thresholds[item.id]} ${item.unit}</div>` : ''}
@@ -1276,12 +1289,11 @@ function renderDailySummary(){
     let usageCell = '—';
     if(prevCount !== null && hasEntry){
       const usage = (prevCount + (stockIn||0)) - Number(entry.count);
-      const sign = usage > 0 ? '' : (usage < 0 ? '' : '');
       const cls = usage > 0 ? 'down' : (usage < 0 ? 'up' : 'flat');
       usageCell = `<span class="delta ${cls}">${usage}</span>`;
     }
 
-    const nameLabel = deleted ? `${display.name} <span class="deleted-tag">deleted</span>` : display.name;
+    const nameLabel = deleted ? `${escapeHtml(display.name)} <span class="deleted-tag">deleted</span>` : escapeHtml(display.name);
 
     return `<tr class="${rowClass}">
       <td>${nameLabel}</td>
@@ -1289,9 +1301,9 @@ function renderDailySummary(){
       <td>${hasEntry ? entry.count : '—'}</td>
       <td>${stockInCell}</td>
       <td>${usageCell}</td>
-      <td>${hasEntry ? (entry.staffName||'—') : '—'}</td>
+      <td>${hasEntry ? escapeHtml(entry.staffName||'—') : '—'}</td>
       <td>${statusTag}</td>
-      <td class="notes-cell">${hasEntry && entry.remarks ? entry.remarks : ''}</td>
+      <td class="notes-cell">${hasEntry && entry.remarks ? escapeHtml(entry.remarks) : ''}</td>
     </tr>`;
   }).join('');
 
@@ -1329,7 +1341,7 @@ async function renderPeriodSummary(){
         if(e.staffName) staffSet.add(e.staffName);
       }
     });
-    const staffList = staffSet.size ? Array.from(staffSet).join(', ') : '—';
+    const staffList = staffSet.size ? escapeHtml(Array.from(staffSet).join(', ')) : '—';
     return `<tr><td>${formatDayLabel(dt)}</td><td>${filledCount}/${state.items.length}</td><td>${staffList}</td></tr>`;
   }).join('');
 
@@ -1367,7 +1379,7 @@ async function renderPeriodSummary(){
       usedCell = `<td class="used-cell">${used !== null ? used : '—'}</td>`;
     }
 
-    const nameLabel = deleted ? `${display.name} <span class="deleted-tag">deleted</span>` : display.name;
+    const nameLabel = deleted ? `${escapeHtml(display.name)} <span class="deleted-tag">deleted</span>` : escapeHtml(display.name);
     return `<tr>${isWeekly?openingCell:''}<td class="item-col">${nameLabel}</td>${cells}${isWeekly?usedCell:''}</tr>`;
   }).join('');
 
@@ -1437,8 +1449,8 @@ function renderThresholdList(){
     row.className = 'threshold-row';
     row.innerHTML = `
       <div>
-        <div class="name">${item.name}</div>
-        <div class="unit">${item.unit}</div>
+        <div class="name">${escapeHtml(item.name)}</div>
+        <div class="unit">${escapeHtml(item.unit)}</div>
       </div>
       <input type="text" inputmode="numeric" pattern="[0-9]*" class="th-input" value="${state.thresholds[item.id] ?? ''}" placeholder="—">
     `;
@@ -1471,8 +1483,8 @@ function renderManageItemsList(){
       row.className = 'manage-row';
       row.innerHTML = `
         <div class="manage-info">
-          <div class="manage-name">${item.name}</div>
-          <div class="manage-sub">${cat.name} · ${item.unit}</div>
+          <div class="manage-name">${escapeHtml(item.name)}</div>
+          <div class="manage-sub">${escapeHtml(cat.name)} · ${escapeHtml(item.unit)}</div>
         </div>
         <div class="manage-actions">
           <button class="edit-btn" aria-label="Edit item">✎</button>
@@ -1499,8 +1511,8 @@ function toggleEditItemRow(row, item){
   const form = document.createElement('div');
   form.className = 'edit-item-form';
   form.innerHTML = `
-    <input type="text" class="edit-name-input" value="${item.name}" placeholder="Item name">
-    <input type="text" class="edit-unit-input" value="${item.unit}" placeholder="Unit">
+    <input type="text" class="edit-name-input" value="${escapeHtml(item.name)}" placeholder="Item name">
+    <input type="text" class="edit-unit-input" value="${escapeHtml(item.unit)}" placeholder="Unit">
     <div class="edit-item-actions">
       <button class="btn edit-save-btn">Save</button>
       <button class="btn edit-cancel-btn">Cancel</button>
@@ -1536,7 +1548,7 @@ function renderManageCategoriesList(){
     row.className = 'manage-row';
     row.innerHTML = `
       <div class="manage-info">
-        <div class="manage-name">${cat.name}</div>
+        <div class="manage-name">${escapeHtml(cat.name)}</div>
         <div class="manage-sub">${itemCount} item${itemCount!==1?'s':''}</div>
       </div>
       <div class="manage-actions">
