@@ -185,7 +185,7 @@ main{padding:14px 16px 8px;max-width:640px;margin:0 auto;}
   text-transform:uppercase;letter-spacing:0.04em;padding:9px 10px;
   border-bottom:1px solid var(--border);position:sticky;top:0;background:var(--bg);
 }
-.summary-table td{padding:10px;border-bottom:1px solid var(--border);font-family:'Poppins',monospace;}
+.summary-table td{padding:10px;border-bottom:1px solid var(--border);font-family:'Poppins',monospace;font-weight:700;}
 .summary-table tbody tr:nth-child(even){background:var(--surface);}
 .summary-table tbody tr:hover{background:var(--surface-2);}
 .summary-table td:first-child{
@@ -194,8 +194,14 @@ main{padding:14px 16px 8px;max-width:640px;margin:0 auto;}
 }
 .summary-table tr.low td{color:var(--danger);}
 .summary-table tr.low td:first-child{color:var(--text);}
-.summary-table tr.missing td{color:var(--text-dim);font-style:italic;}
+.summary-table tr.missing td{color:var(--text-dim);}
 .summary-table tr.missing td:first-child{color:var(--text-dim);font-weight:700;}
+.summary-table tr.missing td.prev-value-cell{color:var(--warn);}
+.summary-table td.prev-value-cell{
+  background:rgba(170,118,85,0.14);color:var(--warn);
+  border-left:2px solid var(--warn);
+}
+.summary-table th#thYesterday{color:var(--warn);}
 .notes-cell{font-family:'Poppins',sans-serif;font-style:normal;color:var(--warn);max-width:160px;white-space:normal;font-size:11.5px;}
 .deleted-tag{font-size:9px;color:var(--text-dim);font-style:italic;background:var(--surface-2);padding:1px 5px;border-radius:5px;margin-left:4px;}
 .tag{display:inline-block;padding:2px 7px;border-radius:99px;font-size:10px;font-family:'Poppins',sans-serif;font-weight:700;}
@@ -402,7 +408,7 @@ nav.bottom .icon{font-size:18px;}
     </div>
     <div class="brand-text">
       <h1>Daily Consumption</h1>
-      <div class="sub">Support Equipment Inventory · <span id="appVersion">v1.1</span></div>
+      <div class="sub">Support Equipment Inventory · <span id="appVersion">v1.4</span></div>
     </div>
   </div>
   <div class="field-row">
@@ -508,7 +514,7 @@ nav.bottom .icon{font-size:18px;}
     </div>
 
     <div style="text-align:center;margin-top:24px;padding-top:16px;border-top:1px solid var(--border);color:var(--text-dim);font-size:10.5px;font-family:'Poppins',monospace;">
-      Daily Consumption <span id="settingsAppVersion">v1.1</span>
+      Daily Consumption <span id="settingsAppVersion">v1.4</span>
     </div>
   </div>
 
@@ -579,7 +585,7 @@ window.storage = {
 // Bump this whenever a meaningful update is shipped, so anyone opening the
 // app can quickly tell whether they're on the latest version (visible in
 // the header and at the bottom of Settings).
-const APP_VERSION = 'v1.1';
+const APP_VERSION = 'v1.4';
 
 const DEFAULT_ITEMS = [
   {id:'byo_menu', name:'BYO Menu', unit:'pack (500pcs)', category:'misc'},
@@ -620,7 +626,7 @@ const DEFAULT_CATEGORIES = [
   {id:'misc', name:'Misc'},
 ];
 
-const ACCESS_PASSWORD = 'Kontolodon123';
+const ACCESS_PASSWORD = '123123';
 
 let state = {
   date: new Date().toISOString().slice(0,10),
@@ -769,22 +775,64 @@ async function loadConfig(){
   // Self-heal: if the stored config is missing, empty, or corrupted,
   // fall back to the built-in item/category list and re-save it.
   if(!Array.isArray(state.items) || state.items.length === 0 || !Array.isArray(state.categories) || state.categories.length === 0){
-    state.items = DEFAULT_ITEMS.map(i=>({...i}));
-    state.categories = DEFAULT_CATEGORIES.map(c=>({...c}));
-    await saveConfig();
+    await saveConfig((cfg)=>{
+      cfg.items = DEFAULT_ITEMS.map(i=>({...i}));
+      cfg.categories = DEFAULT_CATEGORIES.map(c=>({...c}));
+    });
   }
 }
 
-async function saveConfig(){
-  try{
-    const result = await window.storage.set('app_config', JSON.stringify({items: state.items, categories: state.categories}), true);
-    if(!result) throw new Error('no result returned');
-    return true;
-  }catch(e){
-    console.error('config save failed', e);
-    showToast('Failed to save changes');
-    return false;
-  }
+function setConfigUIBusy(busy){
+  ['manageItemsList', 'manageCategoriesList'].forEach(id=>{
+    const el = document.getElementById(id);
+    if(el) el.style.cssText = busy ? 'opacity:0.5;pointer-events:none;transition:opacity .15s;' : '';
+  });
+}
+
+let configSaveQueue = Promise.resolve();
+async function saveConfig(mutatorFn){
+  // Serialize every config save through a single queue. Without this, if
+  // several saves are fired off close together (e.g. adding a bunch of
+  // items quickly), each one can read a "latest" snapshot that's already
+  // stale by the time it writes — because the OTHER save hasn't finished
+  // yet either. Chaining them one-at-a-time guarantees each save always
+  // starts from the fully-completed result of everything before it.
+  const run = async () => {
+    setConfigUIBusy(true);
+    try{
+      let latest = { items: state.items, categories: state.categories };
+      try{
+        const res = await withTimeout(window.storage.get('app_config', true), 6000);
+        if(res){
+          const parsed = JSON.parse(res.value);
+          if(Array.isArray(parsed.items) && Array.isArray(parsed.categories)){
+            latest = parsed;
+          }
+        }
+      }catch(e){
+        // If we can't fetch the latest, fall back to what's already in
+        // memory rather than blocking the save entirely.
+      }
+
+      if(mutatorFn) mutatorFn(latest);
+
+      state.items = latest.items;
+      state.categories = latest.categories;
+
+      const result = await window.storage.set('app_config', JSON.stringify({items: state.items, categories: state.categories}), true);
+      if(!result) throw new Error('no result returned');
+      return true;
+    }catch(e){
+      console.error('config save failed', e);
+      showToast('Failed to save changes');
+      return false;
+    }finally{
+      setConfigUIBusy(false);
+    }
+  };
+  const resultPromise = configSaveQueue.then(run);
+  configSaveQueue = resultPromise.catch(()=>{});
+  return resultPromise;
 }
 
 async function saveThresholds(){
@@ -797,7 +845,7 @@ async function saveThresholds(){
 // that actually has submitted data, skipping any gap days with nothing
 // filled in. This way "Yesterday" always means "the last time someone
 // submitted", not strictly the literal calendar day before.
-async function findLastSubmissionDate(beforeDate, maxLookback = 30){
+async function findLastSubmissionDate(beforeDate, maxLookback = 14){
   const candidates = [];
   const d = new Date(beforeDate + 'T00:00:00');
   for(let i=1; i<=maxLookback; i++){
@@ -937,9 +985,10 @@ function renderInputView(){
       </div>
     `;
     document.getElementById('restoreDefaultsBtn').addEventListener('click', async ()=>{
-      state.items = DEFAULT_ITEMS.map(i=>({...i}));
-      state.categories = DEFAULT_CATEGORIES.map(c=>({...c}));
-      await saveConfig();
+      await saveConfig((cfg)=>{
+        cfg.items = DEFAULT_ITEMS.map(i=>({...i}));
+        cfg.categories = DEFAULT_CATEGORIES.map(c=>({...c}));
+      });
       renderInputView();
       showToast('Default items restored');
     });
@@ -1236,7 +1285,7 @@ function renderDailySummary(){
 
     return `<tr class="${rowClass}">
       <td>${nameLabel}</td>
-      <td>${prevCell}</td>
+      <td class="prev-value-cell">${prevCell}</td>
       <td>${hasEntry ? entry.count : '—'}</td>
       <td>${stockInCell}</td>
       <td>${usageCell}</td>
@@ -1464,10 +1513,13 @@ function toggleEditItemRow(row, item){
     const newName = form.querySelector('.edit-name-input').value.trim();
     const newUnit = form.querySelector('.edit-unit-input').value.trim();
     if(!newName){ showToast('Item name cannot be empty'); return; }
-    const target = state.items.find(i=>i.id===item.id);
-    target.name = newName;
-    target.unit = newUnit || target.unit;
-    const ok = await saveConfig();
+    const ok = await saveConfig((cfg)=>{
+      const target = cfg.items.find(i=>i.id===item.id);
+      if(target){
+        target.name = newName;
+        target.unit = newUnit || target.unit;
+      }
+    });
     if(ok){
       showToast('Item updated');
       renderSettingsView();
@@ -1501,24 +1553,24 @@ function renderManageCategoriesList(){
 }
 
 async function addNewItem(){
+  const btn = document.getElementById('addItemBtn');
   const nameInput = document.getElementById('newItemName');
   const unitInput = document.getElementById('newItemUnit');
   const catSelect = document.getElementById('newItemCategory');
   const name = nameInput.value.trim();
   if(!name){ showToast('Enter an item name first'); return; }
   if(state.categories.length === 0){ showToast('Add a category first'); return; }
-  const id = slugify(name, state.items.map(i=>i.id));
-  state.items.push({
-    id,
-    name,
-    unit: unitInput.value.trim() || 'pcs',
-    category: catSelect.value,
+  const unit = unitInput.value.trim() || 'pcs';
+  const category = catSelect.value;
+  nameInput.value = '';
+  unitInput.value = '';
+
+  const ok = await saveConfig((cfg)=>{
+    const id = slugify(name, cfg.items.map(i=>i.id));
+    cfg.items.push({ id, name, unit, category });
   });
-  const ok = await saveConfig();
   if(ok){
     showToast(`"${name}" added`);
-    nameInput.value = '';
-    unitInput.value = '';
     renderSettingsView();
   }
 }
@@ -1527,37 +1579,41 @@ async function addNewCategory(){
   const nameInput = document.getElementById('newCategoryName');
   const name = nameInput.value.trim();
   if(!name){ showToast('Enter a category name first'); return; }
-  const id = slugify(name, state.categories.map(c=>c.id));
-  state.categories.push({id, name});
-  const ok = await saveConfig();
+  nameInput.value = '';
+
+  const ok = await saveConfig((cfg)=>{
+    const id = slugify(name, cfg.categories.map(c=>c.id));
+    cfg.categories.push({id, name});
+  });
   if(ok){
     showToast(`"${name}" added`);
-    nameInput.value = '';
     renderSettingsView();
   }
 }
 
 async function moveItemInCategory(itemId, direction){
-  const item = state.items.find(i=>i.id===itemId);
-  if(!item) return;
-  const sameCat = state.items.filter(i=>i.category===item.category);
-  const idx = sameCat.findIndex(i=>i.id===itemId);
-  const swapIdx = idx + direction;
-  if(swapIdx < 0 || swapIdx >= sameCat.length) return;
-  const other = sameCat[swapIdx];
-  const fullIdxA = state.items.findIndex(i=>i.id===itemId);
-  const fullIdxB = state.items.findIndex(i=>i.id===other.id);
-  [state.items[fullIdxA], state.items[fullIdxB]] = [state.items[fullIdxB], state.items[fullIdxA]];
-  await saveConfig();
+  await saveConfig((cfg)=>{
+    const item = cfg.items.find(i=>i.id===itemId);
+    if(!item) return;
+    const sameCat = cfg.items.filter(i=>i.category===item.category);
+    const idx = sameCat.findIndex(i=>i.id===itemId);
+    const swapIdx = idx + direction;
+    if(swapIdx < 0 || swapIdx >= sameCat.length) return;
+    const other = sameCat[swapIdx];
+    const fullIdxA = cfg.items.findIndex(i=>i.id===itemId);
+    const fullIdxB = cfg.items.findIndex(i=>i.id===other.id);
+    [cfg.items[fullIdxA], cfg.items[fullIdxB]] = [cfg.items[fullIdxB], cfg.items[fullIdxA]];
+  });
   renderManageItemsList();
 }
 
 async function moveCategory(catId, direction){
-  const idx = state.categories.findIndex(c=>c.id===catId);
-  const swapIdx = idx + direction;
-  if(swapIdx < 0 || swapIdx >= state.categories.length) return;
-  [state.categories[idx], state.categories[swapIdx]] = [state.categories[swapIdx], state.categories[idx]];
-  await saveConfig();
+  await saveConfig((cfg)=>{
+    const idx = cfg.categories.findIndex(c=>c.id===catId);
+    const swapIdx = idx + direction;
+    if(swapIdx < 0 || swapIdx >= cfg.categories.length) return;
+    [cfg.categories[idx], cfg.categories[swapIdx]] = [cfg.categories[swapIdx], cfg.categories[idx]];
+  });
   renderManageCategoriesList();
   renderManageItemsList();
 }
@@ -1566,10 +1622,12 @@ async function removeItem(itemId){
   const item = state.items.find(i=>i.id===itemId);
   const itemName = item ? item.name : 'this item';
   if(!confirm(`Remove "${itemName}"? This can't be undone.`)) return;
-  state.items = state.items.filter(i=>i.id!==itemId);
-  delete state.thresholds[itemId];
-  const ok = await saveConfig();
+
+  const ok = await saveConfig((cfg)=>{
+    cfg.items = cfg.items.filter(i=>i.id!==itemId);
+  });
   if(ok){
+    delete state.thresholds[itemId];
     await saveThresholds();
     showToast('Item removed');
     renderSettingsView();
@@ -1585,8 +1643,10 @@ async function removeCategory(catId){
   const cat = state.categories.find(c=>c.id===catId);
   const catName = cat ? cat.name : 'this category';
   if(!confirm(`Remove "${catName}"? This can't be undone.`)) return;
-  state.categories = state.categories.filter(c=>c.id!==catId);
-  const ok = await saveConfig();
+
+  const ok = await saveConfig((cfg)=>{
+    cfg.categories = cfg.categories.filter(c=>c.id!==catId);
+  });
   if(ok){
     showToast('Category removed');
     renderSettingsView();
@@ -2088,10 +2148,13 @@ function bindStaticListeners(){
     renderInputView();
   });
 
-  document.getElementById('submitBtn').addEventListener('click', async ()=>{
+  document.getElementById('submitBtn').addEventListener('click', async (ev)=>{
+    const btn = ev.currentTarget;
+    if(btn.disabled) return;
     if(!requireStaffName()) return;
+    btn.disabled = true;
     await submitAllDrafts();
-    renderInputView();
+    renderInputView(); // this re-evaluates and restores the correct disabled state
   });
 
   document.querySelectorAll('nav.bottom button').forEach(btn=>{
