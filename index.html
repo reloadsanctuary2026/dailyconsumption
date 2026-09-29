@@ -112,6 +112,10 @@ main{padding:14px 16px 8px;max-width:640px;margin:0 auto;}
   display:flex;align-items:center;gap:8px;
   color:var(--accent);letter-spacing:0.01em;
 }
+.category-header .section-hint{
+  font-family:'Poppins',monospace;font-weight:400;font-size:10.5px;
+  color:var(--text-dim);letter-spacing:0;
+}
 .category-header .count-badge{
   font-family:'Poppins',monospace;font-size:11px;color:var(--text-dim);
   background:var(--surface-2);padding:2px 8px;border-radius:99px;
@@ -408,7 +412,7 @@ nav.bottom .icon{font-size:18px;}
     </div>
     <div class="brand-text">
       <h1>Daily Consumption</h1>
-      <div class="sub">Support Equipment Inventory · <span id="appVersion">v1.5</span></div>
+      <div class="sub">Support Equipment Inventory · <span id="appVersion">v1.6</span></div>
     </div>
   </div>
   <div class="field-row">
@@ -488,6 +492,13 @@ nav.bottom .icon{font-size:18px;}
           <input type="text" id="newItemUnit" placeholder="Unit (e.g. pack, box)">
           <select id="newItemCategory"></select>
         </div>
+        <div class="add-form-row">
+          <select id="newItemFrequency" style="flex:1;">
+            <option value="daily">Count: Daily</option>
+            <option value="weekly">Count: Weekly</option>
+            <option value="monthly">Count: Monthly</option>
+          </select>
+        </div>
         <button class="btn primary" id="addItemBtn">+ Add Item</button>
       </div>
       <div class="subsection-title">Reorder / Remove Items</div>
@@ -514,7 +525,7 @@ nav.bottom .icon{font-size:18px;}
     </div>
 
     <div style="text-align:center;margin-top:24px;padding-top:16px;border-top:1px solid var(--border);color:var(--text-dim);font-size:10.5px;font-family:'Poppins',monospace;">
-      Daily Consumption <span id="settingsAppVersion">v1.5</span>
+      Daily Consumption <span id="settingsAppVersion">v1.6</span>
     </div>
   </div>
 
@@ -585,7 +596,7 @@ window.storage = {
 // Bump this whenever a meaningful update is shipped, so anyone opening the
 // app can quickly tell whether they're on the latest version (visible in
 // the header and at the bottom of Settings).
-const APP_VERSION = 'v1.5';
+const APP_VERSION = 'v1.6';
 
 const DEFAULT_ITEMS = [
   {id:'byo_menu', name:'BYO Menu', unit:'pack (500pcs)', category:'misc'},
@@ -635,6 +646,8 @@ let state = {
   drafts: {},       // itemId -> {count, remarks} — pending, not yet submitted
   previousEntries: {}, // itemId -> {count, ...} from the last date that had submissions
   previousActualDate: null, // the actual date previousEntries came from (may skip gap days)
+  weeklyItemEntries: {},   // itemId -> {count, remarks, ...} for items counted weekly, keyed to the current week
+  monthlyItemEntries: {},  // itemId -> {count, remarks, ...} for items counted monthly, keyed to the current month
   thresholds: {},   // itemId -> number
   items: [],        // mutable copy of DEFAULT_ITEMS, editable via Settings
   categories: [],   // mutable copy of DEFAULT_CATEGORIES, editable via Settings
@@ -753,6 +766,20 @@ async function loadThresholds(){
 // Escapes user-typed text (item names, notes, staff names, etc.) before
 // it's inserted into innerHTML templates. Without this, someone typing
 // "<" or "&" in a Notes field could break the table layout, or worse.
+// Items created before the frequency feature existed don't have this field
+// saved — treat those as 'daily' so nothing changes for them.
+function getItemFrequency(item){
+  return item.frequency || 'daily';
+}
+
+function weekMondayOf(dateStr){
+  return getWeekRange(dateStr)[0];
+}
+
+function monthKeyOf(dateStr){
+  return dateStr.slice(0, 7); // 'YYYY-MM'
+}
+
 function escapeHtml(str){
   if(str === undefined || str === null) return '';
   return String(str)
@@ -879,6 +906,21 @@ async function findLastSubmissionDate(beforeDate, maxLookback = 14){
   return { date: null, entries: {} };
 }
 
+// Generic "fetch one key, with retry" — used for the weekly/monthly item
+// buckets, same resilience pattern as the daily fetch above.
+async function loadKeyedEntries(key){
+  const backoffs = [400, 1000, 2200];
+  for(let attempt=0; attempt<=backoffs.length; attempt++){
+    try{
+      const res = await withTimeout(window.storage.get(key, true), 7000);
+      return res ? JSON.parse(res.value) : {};
+    }catch(e){
+      if(attempt < backoffs.length) await new Promise(r=>setTimeout(r, backoffs[attempt]));
+    }
+  }
+  return {};
+}
+
 async function loadEntriesForDate(date){
   state.drafts = {};
 
@@ -900,6 +942,12 @@ async function loadEntriesForDate(date){
     }
   }
 
+  // Load this week's / this month's data for weekly- and monthly-frequency
+  // items. These aren't as time-critical as today's daily data, so they run
+  // after it, not competing for priority.
+  state.weeklyItemEntries = await loadKeyedEntries(`entries:weekly:${weekMondayOf(date)}`);
+  state.monthlyItemEntries = await loadKeyedEntries(`entries:monthly:${monthKeyOf(date)}`);
+
   try{
     const found = await findLastSubmissionDate(date);
     state.previousEntries = found.entries;
@@ -910,37 +958,40 @@ async function loadEntriesForDate(date){
   }
 }
 
-async function persistEntries(itemIdsBeingSubmitted){
+// Generic read-merge-write for ANY entries bucket (daily/weekly/monthly).
+// Always re-fetches the latest server-side state right before saving, and
+// only overwrites the specific items being submitted right now — so two
+// people submitting around the same time (even for different frequencies)
+// never silently erase each other's data.
+async function persistKeyedEntries(storageKey, currentLocalEntries, itemIdsBeingSubmitted){
   try{
-    // Re-fetch the latest server-side state right before saving, and only
-    // overwrite the specific items we're actually submitting right now.
-    // Without this, if two staff members loaded the page around the same
-    // time and one of them submits first, the second submit would blindly
-    // overwrite the whole day's data with a stale in-memory copy — silently
-    // erasing the first person's entries. Merging on top of a fresh fetch
-    // avoids that "lost update" problem.
     let latestEntries = {};
     try{
-      const res = await withTimeout(window.storage.get(entryKey(), true), 6000);
+      const res = await withTimeout(window.storage.get(storageKey, true), 6000);
       latestEntries = res ? JSON.parse(res.value) : {};
     }catch(e){
-      // If we can't fetch the latest state, fall back to what's already in
-      // memory rather than blocking the save entirely.
-      latestEntries = { ...state.entries };
+      latestEntries = { ...currentLocalEntries };
     }
 
-    (itemIdsBeingSubmitted || Object.keys(state.entries)).forEach(itemId=>{
-      if(state.entries[itemId]) latestEntries[itemId] = state.entries[itemId];
+    itemIdsBeingSubmitted.forEach(itemId=>{
+      if(currentLocalEntries[itemId]) latestEntries[itemId] = currentLocalEntries[itemId];
     });
-    state.entries = latestEntries;
 
-    const result = await window.storage.set(entryKey(), JSON.stringify(state.entries), true);
+    const result = await window.storage.set(storageKey, JSON.stringify(latestEntries), true);
     if(!result) throw new Error('no result returned');
-    return true;
+    return latestEntries;
   }catch(e){
-    console.error('save failed', e);
-    return false;
+    console.error('save failed for', storageKey, e);
+    return null;
   }
+}
+
+async function persistEntries(itemIdsBeingSubmitted){
+  const ids = itemIdsBeingSubmitted || Object.keys(state.entries);
+  const merged = await persistKeyedEntries(entryKey(), state.entries, ids);
+  if(merged === null) return false;
+  state.entries = merged;
+  return true;
 }
 
 async function submitAllDrafts(){
@@ -948,20 +999,46 @@ async function submitAllDrafts(){
   if(draftIds.length === 0) return true;
 
   const staffName = state.staffName || document.getElementById('staffName').value;
+  const now = new Date().toISOString();
+
+  // Route each pending item to its correct bucket (daily/weekly/monthly)
+  // based on that item's configured counting frequency.
+  const dailyIds = [], weeklyIds = [], monthlyIds = [];
   draftIds.forEach(itemId=>{
-    state.entries[itemId] = {
-      ...state.drafts[itemId],
-      staffName,
-      timestamp: new Date().toISOString(),
-    };
+    const item = state.items.find(i=>i.id===itemId);
+    const freq = item ? getItemFrequency(item) : 'daily';
+    const record = { ...state.drafts[itemId], staffName, timestamp: now };
+    if(freq === 'weekly'){ state.weeklyItemEntries[itemId] = record; weeklyIds.push(itemId); }
+    else if(freq === 'monthly'){ state.monthlyItemEntries[itemId] = record; monthlyIds.push(itemId); }
+    else{ state.entries[itemId] = record; dailyIds.push(itemId); }
   });
 
-  let ok = await persistEntries(draftIds);
-  if(!ok){
-    await new Promise(r=>setTimeout(r, 400));
-    ok = await persistEntries(draftIds);
+  async function saveWithRetry(fn){
+    let ok = await fn();
+    if(!ok){
+      await new Promise(r=>setTimeout(r, 400));
+      ok = await fn();
+    }
+    return ok;
   }
 
+  const results = await Promise.all([
+    dailyIds.length ? saveWithRetry(()=>persistEntries(dailyIds)) : true,
+    weeklyIds.length ? saveWithRetry(async ()=>{
+      const merged = await persistKeyedEntries(`entries:weekly:${weekMondayOf(state.date)}`, state.weeklyItemEntries, weeklyIds);
+      if(merged === null) return false;
+      state.weeklyItemEntries = merged;
+      return true;
+    }) : true,
+    monthlyIds.length ? saveWithRetry(async ()=>{
+      const merged = await persistKeyedEntries(`entries:monthly:${monthKeyOf(state.date)}`, state.monthlyItemEntries, monthlyIds);
+      if(merged === null) return false;
+      state.monthlyItemEntries = merged;
+      return true;
+    }) : true,
+  ]);
+
+  const ok = results.every(r=>r);
   if(ok){
     state.drafts = {};
     showToast(`✅ ${draftIds.length} item${draftIds.length>1?'s':''} submitted successfully`, 2800);
@@ -1013,11 +1090,12 @@ function renderInputView(){
   const query = (state.searchQuery || '').trim().toLowerCase();
 
   state.categories.forEach(cat=>{
-    let catItems = state.items.filter(i=>i.category===cat.id);
+    let catItems = state.items.filter(i=>i.category===cat.id && getItemFrequency(i)==='daily');
     if(query){
       catItems = catItems.filter(i=> i.name.toLowerCase().includes(query));
       if(catItems.length === 0) return; // hide empty categories while searching
     }
+    if(catItems.length === 0) return; // category has no daily items to show here
     const wrap = document.createElement('div');
     wrap.className = 'category';
     const filledCount = catItems.filter(i=> isFilled(i.id)).length;
@@ -1038,6 +1116,12 @@ function renderInputView(){
       itemsWrap.appendChild(renderItemCard(item));
     });
   });
+
+  // Weekly- and monthly-frequency items get their own sections, since they
+  // aren't tied to today's date — they represent "this week" / "this month"
+  // and only need counting once per period, regardless of category.
+  renderFrequencySection(container, 'weekly', '📅 Weekly Items', query);
+  renderFrequencySection(container, 'monthly', '🗓️ Monthly Items', query);
 
   if(query && container.children.length === 0){
     container.innerHTML = `<div class="empty-state"><p>No items match "${state.searchQuery}"</p></div>`;
@@ -1063,8 +1147,9 @@ function renderInputView(){
 // of entries (used for Weekly/Monthly trend tables) so deleted items with
 // data anywhere in the period still show up.
 function getReportItemListMulti(dataByDate){
-  const liveIds = new Set(state.items.map(i=>i.id));
-  const list = state.items.map(i=>({ id:i.id, deleted:false }));
+  const liveDailyItems = state.items.filter(i=> getItemFrequency(i) === 'daily');
+  const liveIds = new Set(liveDailyItems.map(i=>i.id));
+  const list = liveDailyItems.map(i=>({ id:i.id, deleted:false }));
   const seenDeleted = new Set();
   Object.values(dataByDate || {}).forEach(entriesObj=>{
     Object.keys(entriesObj || {}).forEach(itemId=>{
@@ -1091,8 +1176,9 @@ function resolveItemDisplay(itemId, entry){
 // entries but has since been deleted from Settings (shown using its
 // snapshotted name/unit, so historical data for deleted items isn't lost).
 function getReportItemList(entriesObj){
-  const liveIds = new Set(state.items.map(i=>i.id));
-  const list = state.items.map(i=>({ id:i.id, deleted:false }));
+  const liveDailyItems = state.items.filter(i=> getItemFrequency(i) === 'daily');
+  const liveIds = new Set(liveDailyItems.map(i=>i.id));
+  const list = liveDailyItems.map(i=>({ id:i.id, deleted:false }));
   Object.keys(entriesObj || {}).forEach(itemId=>{
     if(!liveIds.has(itemId)){
       list.push({ id:itemId, deleted:true });
@@ -1108,8 +1194,48 @@ function formatDelta(itemId){
   return Number(prev.count);
 }
 
+function getCommittedEntriesFor(item){
+  const freq = getItemFrequency(item);
+  if(freq === 'weekly') return state.weeklyItemEntries;
+  if(freq === 'monthly') return state.monthlyItemEntries;
+  return state.entries;
+}
+
+function renderFrequencySection(container, frequency, label, query){
+  let items = state.items.filter(i=> getItemFrequency(i) === frequency);
+  if(query) items = items.filter(i=> i.name.toLowerCase().includes(query));
+  if(items.length === 0) return;
+
+  const pseudoId = `__${frequency}__`;
+  const periodLabel = frequency === 'weekly'
+    ? (()=>{ const w = getWeekRange(state.date); return `${formatShort(w[0])}–${formatShort(w[6])}`; })()
+    : formatMonthYear(state.date);
+
+  const wrap = document.createElement('div');
+  wrap.className = 'category';
+  const filledCount = items.filter(i=> isFilled(i.id)).length;
+  const collapsed = query ? false : state.collapsedCategories.has(pseudoId);
+  wrap.innerHTML = `
+    <div class="category-header ${collapsed?'collapsed':''}" data-cat="${pseudoId}">
+      <div class="name">${label} <span class="section-hint">(${periodLabel})</span></div>
+      <div style="display:flex;align-items:center;gap:8px;">
+        <span class="count-badge">${filledCount}/${items.length}</span>
+        <span class="chevron-btn"><span class="chevron">▾</span></span>
+      </div>
+    </div>
+    <div class="category-items ${collapsed?'hidden':''}" id="cat-items-${pseudoId}"></div>
+  `;
+  container.appendChild(wrap);
+  const itemsWrap = wrap.querySelector(`#cat-items-${pseudoId}`);
+  items.forEach(item=>{
+    itemsWrap.appendChild(renderItemCard(item));
+  });
+}
+
 function getEffective(itemId){
-  return state.drafts[itemId] || state.entries[itemId] || {};
+  const item = state.items.find(i=>i.id===itemId);
+  const committed = item ? getCommittedEntriesFor(item) : state.entries;
+  return state.drafts[itemId] || committed[itemId] || {};
 }
 function isFilled(itemId){
   const eff = getEffective(itemId);
@@ -1210,7 +1336,8 @@ function renderItemCard(item){
       if(deltaEl) deltaEl.innerHTML = line;
     }
 
-    updateCategoryBadge(item.category);
+    const freq = getItemFrequency(item);
+    updateCategoryBadge(freq === 'daily' ? item.category : `__${freq}__`);
     updateProgress();
   }
 
@@ -1238,7 +1365,10 @@ function renderItemCard(item){
 }
 
 function updateCategoryBadge(catId){
-  const catItems = state.items.filter(i=>i.category===catId);
+  let catItems;
+  if(catId === '__weekly__') catItems = state.items.filter(i=> getItemFrequency(i)==='weekly');
+  else if(catId === '__monthly__') catItems = state.items.filter(i=> getItemFrequency(i)==='monthly');
+  else catItems = state.items.filter(i=>i.category===catId && getItemFrequency(i)==='daily');
   const filledCount = catItems.filter(i=> isFilled(i.id)).length;
   const header = document.querySelector(`.category-header[data-cat="${catId}"] .count-badge`);
   if(header) header.textContent = `${filledCount}/${catItems.length}`;
@@ -1387,6 +1517,36 @@ async function renderPeriodSummary(){
     <div class="opening-hint">Opening = closing count from ${formatDayLabel(prevDayDate)} (previous week's last day), filled in automatically by staff on the Input tab.</div>
   ` : '';
 
+  // Weekly-frequency items (in the Weekly view) or Monthly-frequency items
+  // (in the Monthly view) only have ONE value for the whole period, not a
+  // day-by-day breakdown — so they get their own small section instead of
+  // a spot in the daily trend table.
+  const periodItemFrequency = isWeekly ? 'weekly' : 'monthly';
+  const periodItemsKey = isWeekly ? `entries:weekly:${weekMondayOf(state.periodAnchorDate)}` : `entries:monthly:${monthKeyOf(state.periodAnchorDate)}`;
+  const periodItemsEntries = await loadKeyedEntries(periodItemsKey);
+  const periodFreqItems = state.items.filter(i=> getItemFrequency(i) === periodItemFrequency);
+
+  const periodItemsRowsHtml = periodFreqItems.map(item=>{
+    const entry = periodItemsEntries[item.id];
+    const hasEntry = entry && entry.count !== '' && entry.count !== undefined;
+    const lowNow = hasEntry && isLow(item.id, entry.count);
+    const statusTag = !hasEntry ? '<span class="tag missing">Not filled</span>' : (lowNow ? '<span class="tag low">Low</span>' : '<span class="tag ok">OK</span>');
+    return `<tr class="${!hasEntry?'missing':(lowNow?'low':'')}">
+      <td>${escapeHtml(item.name)}</td>
+      <td>${hasEntry?entry.count:'—'}</td>
+      <td>${hasEntry?escapeHtml(entry.staffName||'—'):'—'}</td>
+      <td>${statusTag}</td>
+    </tr>`;
+  }).join('');
+
+  const periodItemsSectionHtml = periodFreqItems.length > 0 ? `
+    <div class="subsection-title">${isWeekly?'📅 Weekly':'🗓️ Monthly'} Items <span class="section-hint">(this ${isWeekly?'week':'month'})</span></div>
+    <table class="summary-table" style="margin-bottom:18px;">
+      <thead><tr><th>Item</th><th>Count</th><th>Staff</th><th>Status</th></tr></thead>
+      <tbody>${periodItemsRowsHtml}</tbody>
+    </table>
+  ` : '';
+
   const weeklyToolbarHtml = isWeekly ? `
     <div class="summary-toolbar">
       <button class="btn primary" id="exportWeeklyCsvBtn">⬇ Excel</button>
@@ -1401,6 +1561,7 @@ async function renderPeriodSummary(){
       <thead><tr><th>Date</th><th>Filled</th><th>Staff Who Input</th></tr></thead>
       <tbody>${staffLogRows}</tbody>
     </table>
+    ${periodItemsSectionHtml}
     <div class="subsection-title">Stock Trend by Item</div>
     ${openingHintHtml}
     <div class="trend-scroll">
@@ -1569,17 +1730,19 @@ async function addNewItem(){
   const nameInput = document.getElementById('newItemName');
   const unitInput = document.getElementById('newItemUnit');
   const catSelect = document.getElementById('newItemCategory');
+  const freqSelect = document.getElementById('newItemFrequency');
   const name = nameInput.value.trim();
   if(!name){ showToast('Enter an item name first'); return; }
   if(state.categories.length === 0){ showToast('Add a category first'); return; }
   const unit = unitInput.value.trim() || 'pcs';
   const category = catSelect.value;
+  const frequency = freqSelect.value || 'daily';
   nameInput.value = '';
   unitInput.value = '';
 
   const ok = await saveConfig((cfg)=>{
     const id = slugify(name, cfg.items.map(i=>i.id));
-    cfg.items.push({ id, name, unit, category });
+    cfg.items.push({ id, name, unit, category, frequency });
   });
   if(ok){
     showToast(`"${name}" added`);
@@ -2077,6 +2240,11 @@ function switchView(viewName){
   document.querySelectorAll('nav.bottom button').forEach(b=>b.classList.toggle('active', b.dataset.view===viewName));
   document.getElementById('inputProgressWrap').style.display = viewName === 'input' ? 'block' : 'none';
   document.getElementById('itemSearchWrap').style.display = viewName === 'input' ? 'block' : 'none';
+  // Re-render every tab on every visit — not just Summary/Settings — so
+  // changes made in Settings (new/edited/removed items) are immediately
+  // reflected the moment someone switches back to Input, instead of only
+  // showing up after some other trigger (like changing the date).
+  if(viewName === 'input') renderInputView();
   if(viewName === 'summary') renderSummaryView();
   if(viewName === 'settings') renderSettingsView();
 }
