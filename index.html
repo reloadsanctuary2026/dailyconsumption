@@ -412,7 +412,7 @@ nav.bottom .icon{font-size:18px;}
     </div>
     <div class="brand-text">
       <h1>Daily Consumption</h1>
-      <div class="sub">Support Equipment Inventory · <span id="appVersion">v1.6</span></div>
+      <div class="sub">Support Equipment Inventory · <span id="appVersion">v1.7</span></div>
     </div>
   </div>
   <div class="field-row">
@@ -525,7 +525,7 @@ nav.bottom .icon{font-size:18px;}
     </div>
 
     <div style="text-align:center;margin-top:24px;padding-top:16px;border-top:1px solid var(--border);color:var(--text-dim);font-size:10.5px;font-family:'Poppins',monospace;">
-      Daily Consumption <span id="settingsAppVersion">v1.6</span>
+      Daily Consumption <span id="settingsAppVersion">v1.7</span>
     </div>
   </div>
 
@@ -596,7 +596,7 @@ window.storage = {
 // Bump this whenever a meaningful update is shipped, so anyone opening the
 // app can quickly tell whether they're on the latest version (visible in
 // the header and at the bottom of Settings).
-const APP_VERSION = 'v1.6';
+const APP_VERSION = 'v1.7';
 
 const DEFAULT_ITEMS = [
   {id:'byo_menu', name:'BYO Menu', unit:'pack (500pcs)', category:'misc'},
@@ -1175,6 +1175,22 @@ function resolveItemDisplay(itemId, entry){
 // configured item, PLUS any item that has data for this specific set of
 // entries but has since been deleted from Settings (shown using its
 // snapshotted name/unit, so historical data for deleted items isn't lost).
+// Generic version of getReportItemList for a SPECIFIC frequency bucket
+// (weekly or monthly items), so a still-existing weekly item isn't wrongly
+// tagged "deleted" just because it's not in the daily-only item list.
+function getFrequencyReportItemList(entriesObj, frequency){
+  const liveItems = state.items.filter(i=> getItemFrequency(i) === frequency);
+  const liveIds = new Set(liveItems.map(i=>i.id));
+  const list = liveItems.map(i=>({ id:i.id, deleted:false }));
+  Object.keys(entriesObj || {}).forEach(itemId=>{
+    if(!liveIds.has(itemId)){
+      list.push({ id:itemId, deleted:true });
+      liveIds.add(itemId);
+    }
+  });
+  return list;
+}
+
 function getReportItemList(entriesObj){
   const liveDailyItems = state.items.filter(i=> getItemFrequency(i) === 'daily');
   const liveIds = new Set(liveDailyItems.map(i=>i.id));
@@ -1192,6 +1208,20 @@ function formatDelta(itemId){
   const prev = state.previousEntries[itemId];
   if(!prev || prev.count === '' || prev.count === undefined) return null;
   return Number(prev.count);
+}
+
+// Single source of truth for the Yesterday/Today/StockIn/Usage math used by
+// the Daily Summary table, Excel export, and PDF export. Previously this
+// formula was copy-pasted three times — a real risk if it ever needed to
+// change (easy to fix one spot and forget the others). Callers format the
+// raw values however their output needs (HTML span, Excel cell, PDF cell).
+function computeDailyRowData(itemId, entry){
+  const hasEntry = entry && entry.count !== '' && entry.count !== undefined;
+  const lowNow = hasEntry && isLow(itemId, entry.count);
+  const prevCount = formatDelta(itemId);
+  const stockIn = (hasEntry && entry.stockIn !== undefined && entry.stockIn !== '') ? Number(entry.stockIn) : null;
+  const usage = (prevCount !== null && hasEntry) ? ((prevCount + (stockIn||0)) - Number(entry.count)) : null;
+  return { hasEntry, lowNow, prevCount, stockIn, usage };
 }
 
 function getCommittedEntriesFor(item){
@@ -1403,22 +1433,18 @@ function renderDailySummary(){
   const rows = reportItems.map(({id, deleted})=>{
     const entry = state.entries[id];
     const display = resolveItemDisplay(id, entry);
-    const hasEntry = entry && entry.count !== '' && entry.count !== undefined;
+    const { hasEntry, lowNow, prevCount, stockIn, usage } = computeDailyRowData(id, entry);
     if(hasEntry) filled++;
-    const lowNow = hasEntry && isLow(id, entry.count);
     if(hasEntry){ if(lowNow) low++; else ok++; }
     let statusTag = '<span class="tag missing">Not filled</span>';
     if(hasEntry) statusTag = lowNow ? '<span class="tag low">Low</span>' : '<span class="tag ok">OK</span>';
     const rowClass = !hasEntry ? 'missing' : (lowNow ? 'low' : '');
 
-    const prevCount = formatDelta(id);
     const prevCell = prevCount !== null ? prevCount : '—';
-    const stockIn = (hasEntry && entry.stockIn !== undefined && entry.stockIn !== '') ? Number(entry.stockIn) : null;
     const stockInCell = stockIn !== null ? `+${stockIn}` : '—';
 
     let usageCell = '—';
-    if(prevCount !== null && hasEntry){
-      const usage = (prevCount + (stockIn||0)) - Number(entry.count);
+    if(usage !== null){
       const cls = usage > 0 ? 'down' : (usage < 0 ? 'up' : 'flat');
       usageCell = `<span class="delta ${cls}">${usage}</span>`;
     }
@@ -1524,22 +1550,24 @@ async function renderPeriodSummary(){
   const periodItemFrequency = isWeekly ? 'weekly' : 'monthly';
   const periodItemsKey = isWeekly ? `entries:weekly:${weekMondayOf(state.periodAnchorDate)}` : `entries:monthly:${monthKeyOf(state.periodAnchorDate)}`;
   const periodItemsEntries = await loadKeyedEntries(periodItemsKey);
-  const periodFreqItems = state.items.filter(i=> getItemFrequency(i) === periodItemFrequency);
+  const periodFreqItemsList = getFrequencyReportItemList(periodItemsEntries, periodItemFrequency);
 
-  const periodItemsRowsHtml = periodFreqItems.map(item=>{
-    const entry = periodItemsEntries[item.id];
+  const periodItemsRowsHtml = periodFreqItemsList.map(({id, deleted})=>{
+    const entry = periodItemsEntries[id];
+    const display = resolveItemDisplay(id, entry);
     const hasEntry = entry && entry.count !== '' && entry.count !== undefined;
-    const lowNow = hasEntry && isLow(item.id, entry.count);
+    const lowNow = hasEntry && isLow(id, entry.count);
     const statusTag = !hasEntry ? '<span class="tag missing">Not filled</span>' : (lowNow ? '<span class="tag low">Low</span>' : '<span class="tag ok">OK</span>');
+    const nameLabel = deleted ? `${escapeHtml(display.name)} <span class="deleted-tag">deleted</span>` : escapeHtml(display.name);
     return `<tr class="${!hasEntry?'missing':(lowNow?'low':'')}">
-      <td>${escapeHtml(item.name)}</td>
+      <td>${nameLabel}</td>
       <td>${hasEntry?entry.count:'—'}</td>
       <td>${hasEntry?escapeHtml(entry.staffName||'—'):'—'}</td>
       <td>${statusTag}</td>
     </tr>`;
   }).join('');
 
-  const periodItemsSectionHtml = periodFreqItems.length > 0 ? `
+  const periodItemsSectionHtml = periodFreqItemsList.length > 0 ? `
     <div class="subsection-title">${isWeekly?'📅 Weekly':'🗓️ Monthly'} Items <span class="section-hint">(this ${isWeekly?'week':'month'})</span></div>
     <table class="summary-table" style="margin-bottom:18px;">
       <thead><tr><th>Item</th><th>Count</th><th>Staff</th><th>Status</th></tr></thead>
@@ -1908,19 +1936,15 @@ async function exportCSV(){
     const rows = getReportItemList(state.entries).map(({id, deleted})=>{
       const entry = state.entries[id];
       const display = resolveItemDisplay(id, entry);
-      const hasEntry = entry && entry.count !== '' && entry.count !== undefined;
-      const lowNow = hasEntry && isLow(id, entry.count);
+      const { hasEntry, lowNow, prevCount, stockIn, usage } = computeDailyRowData(id, entry);
       const status = !hasEntry ? 'Not filled' : (lowNow ? 'Low' : 'OK');
-      const prevCount = formatDelta(id);
-      const stockIn = (hasEntry && entry.stockIn !== undefined && entry.stockIn !== '') ? Number(entry.stockIn) : '';
-      const usage = (prevCount !== null && hasEntry) ? ((prevCount + (stockIn||0)) - Number(entry.count)) : '';
       return [
         display.name + (deleted ? ' (deleted)' : ''),
         display.unit,
         prevCount !== null ? prevCount : '',
         hasEntry ? Number(entry.count) : '',
-        stockIn,
-        usage,
+        stockIn !== null ? stockIn : '',
+        usage !== null ? usage : '',
         hasEntry ? (entry.staffName||'') : '',
         hasEntry ? (entry.remarks||'') : '',
         status,
@@ -2070,25 +2094,20 @@ async function exportDailyPDF(){
     const rows = reportItems.map(({id, deleted})=>{
       const entry = state.entries[id];
       const display = resolveItemDisplay(id, entry);
-      const hasEntry = entry && entry.count !== '' && entry.count !== undefined;
-      const lowNow = hasEntry && isLow(id, entry.count);
+      const { hasEntry, lowNow, prevCount, stockIn, usage } = computeDailyRowData(id, entry);
       if(hasEntry){ filled++; lowNow ? low++ : ok++; }
       const status = !hasEntry ? 'Not filled' : (lowNow ? 'Low Stock' : 'OK');
-      const prevCount = formatDelta(id);
-      const stockIn = (hasEntry && entry.stockIn !== undefined && entry.stockIn !== '') ? Number(entry.stockIn) : null;
-      const usage = (prevCount !== null && hasEntry) ? ((prevCount + (stockIn||0)) - Number(entry.count)) : '';
       return [
         display.name + (deleted ? ' (deleted)' : ''),
         display.unit,
         prevCount !== null ? String(prevCount) : '—',
         hasEntry ? String(entry.count) : '—',
         stockIn !== null ? `+${stockIn}` : '—',
-        usage === '' ? '—' : String(usage),
+        usage === null ? '—' : String(usage),
         hasEntry ? (entry.staffName||'—') : '—',
         status,
       ];
     });
-
     doc.setFontSize(10);
     doc.setTextColor(60,60,60);
     doc.text(`Filled: ${filled}/${reportItems.length}    Low Stock: ${low}    OK: ${ok}`, 14, 34);
