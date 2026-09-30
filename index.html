@@ -116,6 +116,11 @@ main{padding:14px 16px 8px;max-width:640px;margin:0 auto;}
   font-family:'Poppins',monospace;font-weight:400;font-size:10.5px;
   color:var(--text-dim);letter-spacing:0;
 }
+.input-period-hint{
+  font-size:11.5px;color:var(--text-dim);font-family:'Poppins',monospace;
+  margin-bottom:12px;padding:8px 12px;background:var(--surface);border-radius:9px;
+  text-align:center;
+}
 .category-header .count-badge{
   font-family:'Poppins',monospace;font-size:11px;color:var(--text-dim);
   background:var(--surface-2);padding:2px 8px;border-radius:99px;
@@ -216,8 +221,8 @@ main{padding:14px 16px 8px;max-width:640px;margin:0 auto;}
 .summary-toolbar{display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap;}
 
 .period-tabs{display:flex;gap:4px;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:4px;margin-bottom:14px;}
-.period-tab{flex:1;background:none;border:none;color:var(--text-dim);padding:8px 4px;border-radius:9px;font-size:12.5px;font-weight:700;font-family:'Poppins',sans-serif;}
-.period-tab.active{background:var(--accent);color:#0D0D0D;}
+.period-tab,.input-tab{flex:1;background:none;border:none;color:var(--text-dim);padding:8px 4px;border-radius:9px;font-size:12.5px;font-weight:700;font-family:'Poppins',sans-serif;}
+.period-tab.active,.input-tab.active{background:var(--accent);color:#0D0D0D;}
 
 .period-nav{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;}
 .period-nav.hidden{display:none;}
@@ -353,6 +358,12 @@ nav.bottom .icon{font-size:18px;}
   border:2px solid rgba(0,0,0,0.25);border-top-color:currentColor;
   animation:spin 0.7s linear infinite;vertical-align:-2px;margin-right:6px;
 }
+.busy-overlay{
+  position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
+  background:var(--surface-2);color:var(--text);padding:8px 16px;border-radius:99px;
+  font-size:12px;font-weight:700;white-space:nowrap;z-index:5;
+  box-shadow:0 4px 14px rgba(0,0,0,0.4);pointer-events:none;
+}
 
 .modal-overlay{
   position:fixed;inset:0;z-index:50;
@@ -425,7 +436,7 @@ nav.bottom .icon{font-size:18px;}
     </div>
     <div class="brand-text">
       <h1>Daily Consumption</h1>
-      <div class="sub">Support Equipment Inventory · <span id="appVersion">v1.8</span></div>
+      <div class="sub">Support Equipment Inventory · <span id="appVersion">v1.9</span></div>
     </div>
   </div>
   <div class="field-row">
@@ -451,6 +462,11 @@ nav.bottom .icon{font-size:18px;}
 
   <!-- INPUT VIEW -->
   <div id="itemSearchWrap" style="max-width:640px;margin:22px auto 10px;padding:0 16px;">
+    <div class="period-tabs" id="inputPeriodTabs">
+      <button class="input-tab active" data-input-tab="daily">Daily</button>
+      <button class="input-tab" data-input-tab="weekly">Weekly</button>
+      <button class="input-tab" data-input-tab="monthly">Monthly</button>
+    </div>
     <input type="text" id="itemSearch" placeholder="🔍 Search items..." style="width:100%;padding-top:10px;padding-bottom:10px;">
   </div>
   <div class="view active" id="view-input"></div>
@@ -538,7 +554,7 @@ nav.bottom .icon{font-size:18px;}
     </div>
 
     <div style="text-align:center;margin-top:24px;padding-top:16px;border-top:1px solid var(--border);color:var(--text-dim);font-size:10.5px;font-family:'Poppins',monospace;">
-      Daily Consumption <span id="settingsAppVersion">v1.8</span>
+      Daily Consumption <span id="settingsAppVersion">v1.9</span>
     </div>
   </div>
 
@@ -609,7 +625,7 @@ window.storage = {
 // Bump this whenever a meaningful update is shipped, so anyone opening the
 // app can quickly tell whether they're on the latest version (visible in
 // the header and at the bottom of Settings).
-const APP_VERSION = 'v1.8';
+const APP_VERSION = 'v1.9';
 
 const DEFAULT_ITEMS = [
   {id:'byo_menu', name:'BYO Menu', unit:'pack (500pcs)', category:'misc'},
@@ -665,7 +681,8 @@ let state = {
   thresholds: {},   // itemId -> number
   items: [],        // mutable copy of DEFAULT_ITEMS, editable via Settings
   categories: [],   // mutable copy of DEFAULT_CATEGORIES, editable via Settings
-  collapsedCategories: new Set(),
+  expandedCategories: new Set(), // tracks which categories are OPEN; empty = all collapsed by default
+  inputTab: 'daily', // which Input sub-tab is active: daily / weekly / monthly
   summaryPeriod: 'daily', // daily | weekly | monthly
   periodAnchorDate: new Date().toISOString().slice(0,10),
   unlocked: false,
@@ -867,7 +884,17 @@ async function loadConfig(){
 function setConfigUIBusy(busy){
   ['manageItemsList', 'manageCategoriesList'].forEach(id=>{
     const el = document.getElementById(id);
-    if(el) el.style.cssText = busy ? 'opacity:0.5;pointer-events:none;transition:opacity .15s;' : '';
+    if(!el) return;
+    el.style.cssText = busy ? 'opacity:0.4;pointer-events:none;transition:opacity .15s;position:relative;' : 'position:relative;';
+    const existingOverlay = el.querySelector('.busy-overlay');
+    if(busy && !existingOverlay){
+      const overlay = document.createElement('div');
+      overlay.className = 'busy-overlay';
+      overlay.innerHTML = `<span class="spinner-sm" style="border-color:rgba(255,255,255,0.25);border-top-color:var(--accent);"></span>Saving...`;
+      el.appendChild(overlay);
+    }else if(!busy && existingOverlay){
+      existingOverlay.remove();
+    }
   });
 }
 
@@ -1153,17 +1180,55 @@ function renderInputView(){
 
   const query = (state.searchQuery || '').trim().toLowerCase();
 
+  // Period hint shown at the top of Weekly/Monthly tabs, since those aren't
+  // tied to "today" — they represent the current week/month as a whole.
+  if(state.inputTab === 'weekly'){
+    const w = getWeekRange(state.date);
+    const hint = document.createElement('div');
+    hint.className = 'input-period-hint';
+    hint.textContent = `This week: ${formatShort(w[0])} – ${formatShort(w[6])}`;
+    container.appendChild(hint);
+  }else if(state.inputTab === 'monthly'){
+    const hint = document.createElement('div');
+    hint.className = 'input-period-hint';
+    hint.textContent = `This month: ${formatMonthYear(state.date)}`;
+    container.appendChild(hint);
+  }
+
+  renderCategorizedItems(container, state.inputTab, query);
+
+  if(query && container.children.length === 0){
+    container.innerHTML = `<div class="empty-state"><p>No items match "${state.searchQuery}"</p></div>`;
+  }else if(container.children.length === 0){
+    const label = state.inputTab === 'daily' ? 'daily' : state.inputTab;
+    container.innerHTML = `<div class="empty-state"><p>No ${label} items configured yet.<br>Add one in Settings and set its count to "${label.charAt(0).toUpperCase()+label.slice(1)}".</p></div>`;
+  }
+
+  container.querySelectorAll('.category-header').forEach(h=>{
+    h.addEventListener('click', ()=>{
+      const catId = h.dataset.cat;
+      if(state.expandedCategories.has(catId)) state.expandedCategories.delete(catId);
+      else state.expandedCategories.add(catId);
+      renderInputView();
+    });
+  });
+
+  updateProgress();
+  updateSubmitButton();
+}
+
+function renderCategorizedItems(container, frequency, query){
   state.categories.forEach(cat=>{
-    let catItems = state.items.filter(i=>i.category===cat.id && getItemFrequency(i)==='daily');
+    let catItems = state.items.filter(i=>i.category===cat.id && getItemFrequency(i)===frequency);
     if(query){
       catItems = catItems.filter(i=> i.name.toLowerCase().includes(query));
       if(catItems.length === 0) return; // hide empty categories while searching
     }
-    if(catItems.length === 0) return; // category has no daily items to show here
+    if(catItems.length === 0) return; // category has no items of this frequency
     const wrap = document.createElement('div');
     wrap.className = 'category';
     const filledCount = catItems.filter(i=> isFilled(i.id)).length;
-    const collapsed = query ? false : state.collapsedCategories.has(cat.id);
+    const collapsed = query ? false : !state.expandedCategories.has(cat.id);
     wrap.innerHTML = `
       <div class="category-header ${collapsed?'collapsed':''}" data-cat="${cat.id}">
         <div class="name">${escapeHtml(cat.name)}</div>
@@ -1180,28 +1245,6 @@ function renderInputView(){
       itemsWrap.appendChild(renderItemCard(item));
     });
   });
-
-  // Weekly- and monthly-frequency items get their own sections, since they
-  // aren't tied to today's date — they represent "this week" / "this month"
-  // and only need counting once per period, regardless of category.
-  renderFrequencySection(container, 'weekly', '📅 Weekly Items', query);
-  renderFrequencySection(container, 'monthly', '🗓️ Monthly Items', query);
-
-  if(query && container.children.length === 0){
-    container.innerHTML = `<div class="empty-state"><p>No items match "${state.searchQuery}"</p></div>`;
-  }
-
-  container.querySelectorAll('.category-header').forEach(h=>{
-    h.addEventListener('click', ()=>{
-      const catId = h.dataset.cat;
-      if(state.collapsedCategories.has(catId)) state.collapsedCategories.delete(catId);
-      else state.collapsedCategories.add(catId);
-      renderInputView();
-    });
-  });
-
-  updateProgress();
-  updateSubmitButton();
 }
 
 // Returns the display name/unit for an item, preferring the snapshot saved
@@ -1293,37 +1336,6 @@ function getCommittedEntriesFor(item){
   if(freq === 'weekly') return state.weeklyItemEntries;
   if(freq === 'monthly') return state.monthlyItemEntries;
   return state.entries;
-}
-
-function renderFrequencySection(container, frequency, label, query){
-  let items = state.items.filter(i=> getItemFrequency(i) === frequency);
-  if(query) items = items.filter(i=> i.name.toLowerCase().includes(query));
-  if(items.length === 0) return;
-
-  const pseudoId = `__${frequency}__`;
-  const periodLabel = frequency === 'weekly'
-    ? (()=>{ const w = getWeekRange(state.date); return `${formatShort(w[0])}–${formatShort(w[6])}`; })()
-    : formatMonthYear(state.date);
-
-  const wrap = document.createElement('div');
-  wrap.className = 'category';
-  const filledCount = items.filter(i=> isFilled(i.id)).length;
-  const collapsed = query ? false : state.collapsedCategories.has(pseudoId);
-  wrap.innerHTML = `
-    <div class="category-header ${collapsed?'collapsed':''}" data-cat="${pseudoId}">
-      <div class="name">${label} <span class="section-hint">(${periodLabel})</span></div>
-      <div style="display:flex;align-items:center;gap:8px;">
-        <span class="count-badge">${filledCount}/${items.length}</span>
-        <span class="chevron-btn"><span class="chevron">▾</span></span>
-      </div>
-    </div>
-    <div class="category-items ${collapsed?'hidden':''}" id="cat-items-${pseudoId}"></div>
-  `;
-  container.appendChild(wrap);
-  const itemsWrap = wrap.querySelector(`#cat-items-${pseudoId}`);
-  items.forEach(item=>{
-    itemsWrap.appendChild(renderItemCard(item));
-  });
 }
 
 function getEffective(itemId){
@@ -1430,8 +1442,7 @@ function renderItemCard(item){
       if(deltaEl) deltaEl.innerHTML = line;
     }
 
-    const freq = getItemFrequency(item);
-    updateCategoryBadge(freq === 'daily' ? item.category : `__${freq}__`);
+    updateCategoryBadge(item.category);
     updateProgress();
   }
 
@@ -1459,19 +1470,17 @@ function renderItemCard(item){
 }
 
 function updateCategoryBadge(catId){
-  let catItems;
-  if(catId === '__weekly__') catItems = state.items.filter(i=> getItemFrequency(i)==='weekly');
-  else if(catId === '__monthly__') catItems = state.items.filter(i=> getItemFrequency(i)==='monthly');
-  else catItems = state.items.filter(i=>i.category===catId && getItemFrequency(i)==='daily');
+  const catItems = state.items.filter(i=>i.category===catId && getItemFrequency(i)===state.inputTab);
   const filledCount = catItems.filter(i=> isFilled(i.id)).length;
   const header = document.querySelector(`.category-header[data-cat="${catId}"] .count-badge`);
   if(header) header.textContent = `${filledCount}/${catItems.length}`;
 }
 
 function updateProgress(){
-  const total = state.items.length;
-  const filled = state.items.filter(i=> isFilled(i.id)).length;
-  document.getElementById('progressFill').style.width = `${(filled/total*100).toFixed(0)}%`;
+  const tabItems = state.items.filter(i=> getItemFrequency(i) === state.inputTab);
+  const total = tabItems.length;
+  const filled = tabItems.filter(i=> isFilled(i.id)).length;
+  document.getElementById('progressFill').style.width = total ? `${(filled/total*100).toFixed(0)}%` : '0%';
   document.getElementById('progressLabel').textContent = `${filled} / ${total} items filled`;
 }
 
@@ -2428,6 +2437,15 @@ function bindStaticListeners(){
   });
 
   document.getElementById('exportBtn').addEventListener('click', exportCSV);
+
+  document.querySelectorAll('.input-tab').forEach(tab=>{
+    tab.addEventListener('click', ()=>{
+      document.querySelectorAll('.input-tab').forEach(t=>t.classList.remove('active'));
+      tab.classList.add('active');
+      state.inputTab = tab.dataset.inputTab;
+      renderInputView();
+    });
+  });
   document.getElementById('exportPdfBtn').addEventListener('click', exportDailyPDF);
 
   document.querySelectorAll('.period-tab').forEach(tab=>{
