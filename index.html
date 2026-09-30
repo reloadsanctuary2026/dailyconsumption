@@ -340,6 +340,19 @@ nav.bottom .icon{font-size:18px;}
 .empty-state{text-align:center;padding:40px 20px;color:var(--text-dim);}
 .empty-state .big{font-size:32px;margin-bottom:8px;}
 .empty-state p{font-size:13px;line-height:1.5;}
+.spinner{
+  width:30px;height:30px;border-radius:50%;
+  border:3px solid var(--surface-2);
+  border-top-color:var(--accent);
+  animation:spin 0.8s linear infinite;
+  margin:0 auto 14px;
+}
+@keyframes spin{ to{ transform:rotate(360deg); } }
+.spinner-sm{
+  display:inline-block;width:12px;height:12px;border-radius:50%;
+  border:2px solid rgba(0,0,0,0.25);border-top-color:currentColor;
+  animation:spin 0.7s linear infinite;vertical-align:-2px;margin-right:6px;
+}
 
 .modal-overlay{
   position:fixed;inset:0;z-index:50;
@@ -412,7 +425,7 @@ nav.bottom .icon{font-size:18px;}
     </div>
     <div class="brand-text">
       <h1>Daily Consumption</h1>
-      <div class="sub">Support Equipment Inventory · <span id="appVersion">v1.7</span></div>
+      <div class="sub">Support Equipment Inventory · <span id="appVersion">v1.8</span></div>
     </div>
   </div>
   <div class="field-row">
@@ -422,7 +435,7 @@ nav.bottom .icon{font-size:18px;}
     </div>
     <div class="field">
       <label>Staff Name</label>
-      <input type="text" id="staffName" placeholder="Your name">
+      <input type="text" id="staffName" placeholder="Your name" autocomplete="off">
     </div>
   </div>
   <div class="progress-wrap" id="inputProgressWrap">
@@ -525,7 +538,7 @@ nav.bottom .icon{font-size:18px;}
     </div>
 
     <div style="text-align:center;margin-top:24px;padding-top:16px;border-top:1px solid var(--border);color:var(--text-dim);font-size:10.5px;font-family:'Poppins',monospace;">
-      Daily Consumption <span id="settingsAppVersion">v1.7</span>
+      Daily Consumption <span id="settingsAppVersion">v1.8</span>
     </div>
   </div>
 
@@ -596,7 +609,7 @@ window.storage = {
 // Bump this whenever a meaningful update is shipped, so anyone opening the
 // app can quickly tell whether they're on the latest version (visible in
 // the header and at the bottom of Settings).
-const APP_VERSION = 'v1.7';
+const APP_VERSION = 'v1.8';
 
 const DEFAULT_ITEMS = [
   {id:'byo_menu', name:'BYO Menu', unit:'pack (500pcs)', category:'misc'},
@@ -646,6 +659,7 @@ let state = {
   drafts: {},       // itemId -> {count, remarks} — pending, not yet submitted
   previousEntries: {}, // itemId -> {count, ...} from the last date that had submissions
   previousActualDate: null, // the actual date previousEntries came from (may skip gap days)
+  configLoadFailed: false, // true only when we couldn't confirm server state at all (connectivity issue)
   weeklyItemEntries: {},   // itemId -> {count, remarks, ...} for items counted weekly, keyed to the current week
   monthlyItemEntries: {},  // itemId -> {count, remarks, ...} for items counted monthly, keyed to the current month
   thresholds: {},   // itemId -> number
@@ -780,6 +794,10 @@ function monthKeyOf(dateStr){
   return dateStr.slice(0, 7); // 'YYYY-MM'
 }
 
+function loadingHtml(message){
+  return `<div class="empty-state"><div class="spinner"></div><p>${message}</p></div>`;
+}
+
 function escapeHtml(str){
   if(str === undefined || str === null) return '';
   return String(str)
@@ -803,17 +821,41 @@ function slugify(name, existingIds){
 }
 
 async function loadConfig(){
-  try{
-    const res = await withTimeout(window.storage.get('app_config', true), 4000);
-    if(res){
-      const parsed = JSON.parse(res.value);
-      state.items = parsed.items || [];
-      state.categories = parsed.categories || [];
+  let fetchSucceeded = false;
+  const backoffs = [400, 1000, 2200];
+  for(let attempt=0; attempt<=backoffs.length; attempt++){
+    try{
+      const res = await withTimeout(window.storage.get('app_config', true), 6000);
+      if(res){
+        const parsed = JSON.parse(res.value);
+        state.items = parsed.items || [];
+        state.categories = parsed.categories || [];
+      }else{
+        state.items = [];
+        state.categories = [];
+      }
+      fetchSucceeded = true; // reaching here means the fetch itself worked,
+      break;                 // regardless of whether data existed yet
+    }catch(e){
+      if(attempt < backoffs.length) await new Promise(r=>setTimeout(r, backoffs[attempt]));
     }
-  }catch(e){ /* not found yet, fall through to defaults */ }
+  }
 
-  // Self-heal: if the stored config is missing, empty, or corrupted,
-  // fall back to the built-in item/category list and re-save it.
+  if(!fetchSucceeded){
+    // We could NOT confirm the real state of the config after retrying —
+    // this is a connectivity problem, not evidence the config is empty.
+    // Do NOT self-heal here: writing DEFAULT_ITEMS now would silently
+    // overwrite whatever real data is sitting safely on the server the
+    // moment connectivity comes back. Leave state.items as-is (empty) so
+    // the UI shows a clear "couldn't load" state instead of destroying data.
+    state.configLoadFailed = true;
+    return;
+  }
+  state.configLoadFailed = false;
+
+  // Self-heal: only reachable when the fetch above genuinely SUCCEEDED and
+  // came back empty — i.e. this really is a brand-new config, not a fetch
+  // failure being mistaken for one.
   if(!Array.isArray(state.items) || state.items.length === 0 || !Array.isArray(state.categories) || state.categories.length === 0){
     await saveConfig((cfg)=>{
       cfg.items = DEFAULT_ITEMS.map(i=>({...i}));
@@ -841,17 +883,22 @@ async function saveConfig(mutatorFn){
     setConfigUIBusy(true);
     try{
       let latest = { items: state.items, categories: state.categories };
-      try{
-        const res = await withTimeout(window.storage.get('app_config', true), 6000);
-        if(res){
-          const parsed = JSON.parse(res.value);
-          if(Array.isArray(parsed.items) && Array.isArray(parsed.categories)){
-            latest = parsed;
+      const backoffs = [400, 1000, 2200];
+      for(let attempt=0; attempt<=backoffs.length; attempt++){
+        try{
+          const res = await withTimeout(window.storage.get('app_config', true), 6000);
+          if(res){
+            const parsed = JSON.parse(res.value);
+            if(Array.isArray(parsed.items) && Array.isArray(parsed.categories)){
+              latest = parsed;
+            }
           }
+          break; // fetch succeeded (with or without data) — stop retrying
+        }catch(e){
+          // If every attempt fails, fall back to what's already in memory
+          // rather than blocking the save entirely.
+          if(attempt < backoffs.length) await new Promise(r=>setTimeout(r, backoffs[attempt]));
         }
-      }catch(e){
-        // If we can't fetch the latest, fall back to what's already in
-        // memory rather than blocking the save entirely.
       }
 
       if(mutatorFn) mutatorFn(latest);
@@ -1067,21 +1114,38 @@ function renderInputView(){
   container.innerHTML = '';
 
   if(!state.items || state.items.length === 0){
-    container.innerHTML = `
-      <div class="empty-state">
-        <div class="big">📦</div>
-        <p>No items configured yet.<br>Add items in Settings, or restore the default list below.</p>
-        <button class="btn primary" id="restoreDefaultsBtn" style="margin-top:12px;">Restore Default Items</button>
-      </div>
-    `;
-    document.getElementById('restoreDefaultsBtn').addEventListener('click', async ()=>{
-      await saveConfig((cfg)=>{
-        cfg.items = DEFAULT_ITEMS.map(i=>({...i}));
-        cfg.categories = DEFAULT_CATEGORIES.map(c=>({...c}));
+    if(state.configLoadFailed){
+      // We couldn't confirm whether the server actually has items or not —
+      // showing "Restore Defaults" here would risk overwriting real data
+      // the moment connectivity returns, so we show a retry option instead.
+      container.innerHTML = `
+        <div class="empty-state">
+          <div class="big">⚠️</div>
+          <p>Couldn't load your items — check your connection and try again.<br>Your data is safe; this device just couldn't reach it this time.</p>
+          <button class="btn primary" id="retryLoadBtn" style="margin-top:12px;">Retry</button>
+        </div>
+      `;
+      document.getElementById('retryLoadBtn').addEventListener('click', async ()=>{
+        await loadConfig();
+        renderInputView();
       });
-      renderInputView();
-      showToast('Default items restored');
-    });
+    }else{
+      container.innerHTML = `
+        <div class="empty-state">
+          <div class="big">📦</div>
+          <p>No items configured yet.<br>Add items in Settings, or restore the default list below.</p>
+          <button class="btn primary" id="restoreDefaultsBtn" style="margin-top:12px;">Restore Default Items</button>
+        </div>
+      `;
+      document.getElementById('restoreDefaultsBtn').addEventListener('click', async ()=>{
+        await saveConfig((cfg)=>{
+          cfg.items = DEFAULT_ITEMS.map(i=>({...i}));
+          cfg.categories = DEFAULT_CATEGORIES.map(c=>({...c}));
+        });
+        renderInputView();
+        showToast('Default items restored');
+      });
+    }
     updateProgress();
     updateSubmitButton();
     return;
@@ -1481,7 +1545,7 @@ async function renderPeriodSummary(){
   document.getElementById('periodLabel').textContent = label;
 
   const periodContentEl = document.getElementById('periodContent');
-  periodContentEl.innerHTML = '<div class="empty-state">Loading period data...</div>';
+  periodContentEl.innerHTML = loadingHtml('Loading period data...');
 
   const fetchDates = isWeekly ? [...dates, prevDayDate] : dates;
   const dataByDate = await fetchEntriesBatch(fetchDates);
@@ -1862,7 +1926,7 @@ async function exportWeeklyCSV(){
 
   const btn = document.getElementById('exportWeeklyCsvBtn');
   const originalText = btn.textContent;
-  btn.textContent = 'Loading...';
+  btn.innerHTML = '<span class="spinner-sm"></span>Loading...';
   btn.disabled = true;
   try{
     await ensureXlsxLib();
@@ -1920,7 +1984,7 @@ async function exportWeeklyCSV(){
 async function exportCSV(){
   const btn = document.getElementById('exportBtn');
   const originalText = btn.textContent;
-  btn.textContent = 'Loading...';
+  btn.innerHTML = '<span class="spinner-sm"></span>Loading...';
   btn.disabled = true;
   try{
     await ensureXlsxLib();
@@ -2071,7 +2135,7 @@ function addPdfFooter(doc){
 async function exportDailyPDF(){
   const btn = document.getElementById('exportPdfBtn');
   const originalText = btn.textContent;
-  btn.textContent = 'Loading...';
+  btn.innerHTML = '<span class="spinner-sm"></span>Loading...';
   btn.disabled = true;
   try{
     await ensurePdfLibs();
@@ -2147,7 +2211,7 @@ async function exportWeeklyPDF(){
 
   const btn = document.getElementById('exportWeeklyPdfBtn');
   const originalText = btn.textContent;
-  btn.textContent = 'Loading...';
+  btn.innerHTML = '<span class="spinner-sm"></span>Loading...';
   btn.disabled = true;
   try{
     await ensurePdfLibs();
@@ -2330,7 +2394,7 @@ function bindStaticListeners(){
       }
     }
     state.date = newDate;
-    document.getElementById('view-input').innerHTML = '<div class="empty-state">Loading data...</div>';
+    document.getElementById('view-input').innerHTML = loadingHtml('Loading data...');
     await loadEntriesForDate(state.date);
     renderInputView();
     const activeView = document.querySelector('nav.bottom button.active').dataset.view;
@@ -2421,7 +2485,7 @@ async function init(){
   // even if storage loading is slow or fails.
   bindStaticListeners();
 
-  document.getElementById('view-input').innerHTML = '<div class="empty-state">Loading data...</div>';
+  document.getElementById('view-input').innerHTML = loadingHtml('Loading data...');
 
   try{
     await Promise.all([
@@ -2431,16 +2495,6 @@ async function init(){
     ]);
   }catch(e){
     console.error('Init load failed', e);
-  }
-
-  // Final safety net: no matter what happened above, never leave the item
-  // list empty — always fall back to the built-in defaults if something
-  // slipped through.
-  if(!Array.isArray(state.items) || state.items.length === 0){
-    state.items = DEFAULT_ITEMS.map(i=>({...i}));
-  }
-  if(!Array.isArray(state.categories) || state.categories.length === 0){
-    state.categories = DEFAULT_CATEGORIES.map(c=>({...c}));
   }
 
   renderInputView();
