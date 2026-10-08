@@ -172,8 +172,20 @@ main{padding:14px 16px 8px;max-width:640px;margin:0 auto;}
 }
 .item-meta{display:flex;gap:6px;margin-top:6px;}
 .item-meta input{font-size:10.5px;padding:6px 7px;}
-.item-meta .stockin-input{flex:0 0 68px;text-align:center;}
 .item-meta .remarks-input{flex:1;min-width:0;}
+.receive-btn{
+  flex:0 0 auto;background:var(--surface-2);color:var(--accent);border:1px solid var(--accent-dim);
+  border-radius:8px;padding:6px 8px;font-size:10.5px;font-weight:700;font-family:'Poppins',sans-serif;white-space:nowrap;
+}
+.receive-btn:active{background:var(--accent-dim);color:#0D0D0D;}
+.receipt-list{margin:10px 0;max-height:180px;overflow-y:auto;}
+.receipt-row{display:flex;align-items:center;gap:10px;padding:7px 4px;border-bottom:1px solid var(--border);font-size:12px;}
+.receipt-date{color:var(--text-dim);flex:0 0 58px;font-family:'Poppins',monospace;}
+.receipt-qty{font-weight:700;color:var(--accent);flex:0 0 auto;}
+.receipt-who{flex:1;color:var(--text-dim);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.receipt-del{background:none;border:none;color:var(--danger);font-size:14px;padding:2px 6px;}
+.receipt-empty{color:var(--text-dim);font-size:12px;padding:10px 4px;text-align:center;}
+.receipt-total{font-size:12px;font-weight:700;text-align:right;padding:8px 4px 0;}
 .asset-meta{display:flex;gap:6px;margin-top:6px;}
 .asset-meta input{
   flex:1;font-size:10.5px;padding:6px 7px;text-align:center;
@@ -442,7 +454,7 @@ nav.bottom .icon{font-size:18px;}
     </div>
     <div class="brand-text">
       <h1>Daily Consumption</h1>
-      <div class="sub">Support Equipment Inventory · <span id="appVersion">v2.1</span></div>
+      <div class="sub">Support Equipment Inventory · <span id="appVersion">v2.4</span></div>
     </div>
   </div>
   <div class="field-row">
@@ -502,7 +514,7 @@ nav.bottom .icon{font-size:18px;}
         <button class="btn primary" id="exportPdfBtn">⬇ PDF Report</button>
       </div>
       <table class="summary-table" id="summaryTable">
-        <thead><tr><th>Item</th><th id="thYesterday">Yesterday</th><th id="thToday">Today</th><th>Stock In</th><th>Broken</th><th>Lost</th><th>Usage</th><th>Staff</th><th>Status</th><th>Notes</th></tr></thead>
+        <thead><tr><th>Item</th><th id="thYesterday">Yesterday</th><th id="thToday">Today</th><th>Stock In</th><th>Broken</th><th>Lost</th><th>Spoilage</th><th>Wastage</th><th>Usage</th><th>Staff</th><th>Status</th><th>Notes</th></tr></thead>
         <tbody id="summaryBody"></tbody>
       </table>
     </div>
@@ -534,10 +546,13 @@ nav.bottom .icon{font-size:18px;}
             <option value="monthly">Count: Monthly</option>
           </select>
         </div>
-        <label style="display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--text-dim);margin-bottom:10px;">
-          <input type="checkbox" id="newItemIsAsset" style="width:auto;">
-          This is an asset (track Broken/Lost, not just Usage)
-        </label>
+        <div class="add-form-row">
+          <select id="newItemType" style="flex:1;">
+            <option value="consumable">Type: Consumable (tisu, saus, kantong)</option>
+            <option value="asset">Type: Asset (cutlery, gelas, linen) — Broken/Lost</option>
+            <option value="perishable">Type: Perishable (buah, sayur, daging) — Spoilage/Wastage</option>
+          </select>
+        </div>
         <button class="btn primary" id="addItemBtn">+ Add Item</button>
       </div>
       <div class="subsection-title">Reorder / Remove Items</div>
@@ -564,7 +579,7 @@ nav.bottom .icon{font-size:18px;}
     </div>
 
     <div style="text-align:center;margin-top:24px;padding-top:16px;border-top:1px solid var(--border);color:var(--text-dim);font-size:10.5px;font-family:'Poppins',monospace;">
-      Daily Consumption <span id="settingsAppVersion">v2.1</span>
+      Daily Consumption <span id="settingsAppVersion">v2.4</span>
     </div>
   </div>
 
@@ -581,6 +596,20 @@ nav.bottom .icon{font-size:18px;}
     <div class="modal-actions">
       <button class="btn" id="passwordCancel">Cancel</button>
       <button class="btn primary" id="passwordSubmit">Unlock</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay hidden" id="receiptModal">
+  <div class="modal-box">
+    <div class="modal-title" id="receiptTitle">📦 Terima barang</div>
+    <div class="modal-sub" id="receiptSub"></div>
+    <input type="text" id="receiptQty" placeholder="Jumlah masuk" autocomplete="off">
+    <div class="receipt-list" id="receiptList"></div>
+    <div class="modal-error hidden" id="receiptError"></div>
+    <div class="modal-actions">
+      <button class="btn" id="receiptClose">Tutup</button>
+      <button class="btn primary" id="receiptSave">Simpan</button>
     </div>
   </div>
 </div>
@@ -635,7 +664,7 @@ window.storage = {
 // Bump this whenever a meaningful update is shipped, so anyone opening the
 // app can quickly tell whether they're on the latest version (visible in
 // the header and at the bottom of Settings).
-const APP_VERSION = 'v2.1';
+const APP_VERSION = 'v2.4';
 
 const DEFAULT_ITEMS = [
   {id:'byo_menu', name:'BYO Menu', unit:'pack (500pcs)', category:'misc'},
@@ -686,6 +715,7 @@ let state = {
   previousEntries: {}, // itemId -> {count, ...} from the last date that had submissions
   previousActualDate: null, // the actual date previousEntries came from (may skip gap days)
   configLoadFailed: false, // true only when we couldn't confirm server state at all (connectivity issue)
+  receipts: {},            // storage key -> { itemId: [ {id, qty, date, staffName, timestamp} ] } (barang masuk log, weekly/monthly items)
   weeklyItemEntries: {},   // itemId -> {count, remarks, ...} for items counted weekly, keyed to the current week
   monthlyItemEntries: {},  // itemId -> {count, remarks, ...} for items counted monthly, keyed to the current month
   thresholds: {},   // itemId -> number
@@ -813,6 +843,52 @@ async function loadThresholds(){
 // saved — treat those as 'daily' so nothing changes for them.
 function getItemFrequency(item){
   return item.frequency || 'daily';
+}
+
+// Item types decide which loss columns an item gets:
+//   consumable -> none (tisu, saus, kantong)
+//   asset      -> Broken, Lost (cutlery, gelas, linen)
+//   perishable -> Spoilage, Wastage (buah, sayur, daging) + decimals (kg)
+// Items saved before types existed: isAsset -> 'asset', everything else
+// -> 'consumable', so no existing item or data needs migrating.
+function getItemType(item){
+  if(item.type) return item.type;
+  return item.isAsset ? 'asset' : 'consumable';
+}
+
+const LOSS_FIELDS = {
+  consumable: [],
+  asset: [
+    { key:'broken', label:'Broken' },
+    { key:'lost', label:'Lost' },
+  ],
+  perishable: [
+    { key:'spoilage', label:'Spoilage' },
+    { key:'wastage', label:'Wastage' },
+  ],
+};
+const ALL_LOSS_KEYS = ['broken','lost','spoilage','wastage'];
+
+function itemAllowsDecimal(item){
+  return getItemType(item) === 'perishable';
+}
+
+// Keeps digits only, or digits + ONE decimal point. Indonesian keyboards
+// type a comma for decimals, so "2,5" is accepted and stored as "2.5".
+function sanitizeNumberInput(value, allowDecimal){
+  let v = String(value).replace(',', '.');
+  if(!allowDecimal) return v.replace(/[^0-9]/g, '');
+  v = v.replace(/[^0-9.]/g, '');
+  const firstDot = v.indexOf('.');
+  if(firstDot !== -1){
+    v = v.slice(0, firstDot + 1) + v.slice(firstDot + 1).replace(/\./g, '');
+  }
+  return v;
+}
+
+// Avoids float noise like 0.1 + 0.2 = 0.30000000000000004 in reports.
+function round2(n){
+  return Math.round(n * 100) / 100;
 }
 
 function weekMondayOf(dateStr){
@@ -1007,6 +1083,111 @@ async function loadKeyedEntries(key){
   return {};
 }
 
+// ---- Receiving log (barang masuk) for Weekly/Monthly items --------------
+// Weekly/monthly items are only counted once per period, so deliveries in
+// between are logged one by one ("+ Terima barang") with date and who
+// received them. Usage for the period is then:
+//   opening (last period's count) + total received - closing - losses
+function hasCountValue(e){ return !!e && e.count !== '' && e.count !== undefined; }
+function numOr0(v){ return (v === undefined || v === '' || v === null) ? 0 : Number(v); }
+
+function receiptsKeyFor(item, dateStr){
+  const f = getItemFrequency(item);
+  if(f === 'monthly') return `receipts:monthly:${monthKeyOf(dateStr)}`;
+  if(f === 'weekly') return `receipts:weekly:${weekMondayOf(dateStr)}`;
+  // Daily items: one bucket per month (records carry their own date), so a
+  // week/month summary only needs 1-2 fetches instead of one per day.
+  return `receipts:daily:${monthKeyOf(dateStr)}`;
+}
+function getItemReceipts(item){
+  const bucket = state.receipts[receiptsKeyFor(item, state.date)] || {};
+  const list = bucket[item.id] || [];
+  return getItemFrequency(item) === 'daily' ? list.filter(r=> r.date === state.date) : list;
+}
+function sumReceipts(list){
+  return round2((list || []).reduce((a, r)=> a + (Number(r.qty) || 0), 0));
+}
+// Sum of deliveries with afterDate < date <= uptoDate (afterDate may be null).
+// Deliveries on days nobody counted still belong to the next count.
+function sumReceiptsBetween(list, afterDate, uptoDate){
+  return round2((list || []).reduce((a, r)=>{
+    if((afterDate && r.date <= afterDate) || r.date > uptoDate) return a;
+    return a + (Number(r.qty) || 0);
+  }, 0));
+}
+// Daily-item deliveries already loaded into state (current + previous month).
+function getLoadedDailyReceipts(itemId){
+  const out = [];
+  Object.keys(state.receipts).forEach(k=>{
+    if(k.startsWith('receipts:daily:')) out.push(...(((state.receipts[k] || {})[itemId]) || []));
+  });
+  return out;
+}
+// For summaries: daily-item deliveries across whichever months the given
+// dates touch, merged into { itemId: [records] }.
+async function loadDailyReceiptsForDates(dates){
+  const keys = [...new Set(dates.map(d=> `receipts:daily:${monthKeyOf(d)}`))];
+  const buckets = await Promise.all(keys.map(k=> loadKeyedEntries(k)));
+  const merged = {};
+  buckets.forEach(b=> Object.keys(b || {}).forEach(id=>{ (merged[id] = merged[id] || []).push(...b[id]); }));
+  return merged;
+}
+
+// Like loadKeyedEntries, but tells "fetch failed" apart from "nothing there
+// yet". Writers MUST use this: treating a failed fetch as empty and then
+// saving would overwrite the existing log.
+async function fetchKeyStrict(key){
+  const backoffs = [400, 1000, 2200];
+  for(let attempt=0; attempt<=backoffs.length; attempt++){
+    try{
+      const res = await withTimeout(window.storage.get(key, true), 7000);
+      return { ok:true, data: res ? JSON.parse(res.value) : {} };
+    }catch(e){
+      if(attempt < backoffs.length) await new Promise(r=>setTimeout(r, backoffs[attempt]));
+    }
+  }
+  return { ok:false, data:null };
+}
+
+// Serialized read-merge-write, so quick taps or two people receiving at the
+// same time append to the log instead of clobbering each other.
+let receiptQueue = Promise.resolve();
+function mutateReceipts(key, mutator){
+  const run = async ()=>{
+    const got = await fetchKeyStrict(key);
+    if(!got.ok) return false; // couldn't confirm current log: write nothing
+    mutator(got.data);
+    try{
+      const result = await window.storage.set(key, JSON.stringify(got.data), true);
+      if(!result) return false;
+      state.receipts[key] = got.data;
+      return true;
+    }catch(e){
+      console.error('receipt save failed', e);
+      return false;
+    }
+  };
+  const p = receiptQueue.then(run);
+  receiptQueue = p.catch(()=>{});
+  return p;
+}
+
+function addReceipt(item, qty){
+  const record = {
+    id: 'r' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+    qty, date: state.date, staffName: getStaffName(), timestamp: new Date().toISOString(),
+  };
+  return mutateReceipts(receiptsKeyFor(item, state.date), (data)=>{
+    (data[item.id] = data[item.id] || []).push(record);
+  });
+}
+
+function removeReceipt(item, receiptId){
+  return mutateReceipts(receiptsKeyFor(item, state.date), (data)=>{
+    data[item.id] = (data[item.id] || []).filter(r=> r.id !== receiptId);
+  });
+}
+
 async function loadEntriesForDate(date){
   state.drafts = {};
 
@@ -1031,13 +1212,24 @@ async function loadEntriesForDate(date){
   // Load this week's / this month's data for weekly- and monthly-frequency
   // items. These aren't as time-critical as today's daily data, so they run
   // after it, not competing for priority.
-  state.weeklyItemEntries = await loadKeyedEntries(`entries:weekly:${weekMondayOf(date)}`);
-  state.monthlyItemEntries = await loadKeyedEntries(`entries:monthly:${monthKeyOf(date)}`);
+  const wKey = `receipts:weekly:${weekMondayOf(date)}`, mKey = `receipts:monthly:${monthKeyOf(date)}`, dKey = `receipts:daily:${monthKeyOf(date)}`;
+  const [wEntries, mEntries, wRec, mRec, dRec] = await Promise.all([
+    loadKeyedEntries(`entries:weekly:${weekMondayOf(date)}`),
+    loadKeyedEntries(`entries:monthly:${monthKeyOf(date)}`),
+    loadKeyedEntries(wKey), loadKeyedEntries(mKey), loadKeyedEntries(dKey),
+  ]);
+  state.weeklyItemEntries = wEntries;
+  state.monthlyItemEntries = mEntries;
+  state.receipts = { [wKey]: wRec, [mKey]: mRec, [dKey]: dRec };
 
   try{
     const found = await findLastSubmissionDate(date);
     state.previousEntries = found.entries;
     state.previousActualDate = found.date;
+    if(found.date && monthKeyOf(found.date) !== monthKeyOf(date)){
+      const pk = `receipts:daily:${monthKeyOf(found.date)}`;
+      state.receipts[pk] = await loadKeyedEntries(pk);
+    }
   }catch(e){
     state.previousEntries = {};
     state.previousActualDate = null;
@@ -1338,11 +1530,26 @@ function computeDailyRowData(itemId, entry){
   const hasEntry = entry && entry.count !== '' && entry.count !== undefined;
   const lowNow = hasEntry && isLow(itemId, entry.count);
   const prevCount = formatDelta(itemId);
-  const stockIn = (hasEntry && entry.stockIn !== undefined && entry.stockIn !== '') ? Number(entry.stockIn) : null;
-  const usage = (prevCount !== null && hasEntry) ? ((prevCount + (stockIn||0)) - Number(entry.count)) : null;
-  const broken = (hasEntry && entry.broken !== undefined && entry.broken !== '') ? Number(entry.broken) : null;
-  const lost = (hasEntry && entry.lost !== undefined && entry.lost !== '') ? Number(entry.lost) : null;
-  return { hasEntry, lowNow, prevCount, stockIn, usage, broken, lost };
+  const numOrNull = (v)=> (hasEntry && v !== undefined && v !== '') ? Number(v) : null;
+  // Stock In = deliveries logged since the last counted day (up to today),
+  // plus any old manually-typed value from before the log existed.
+  const loggedIn = sumReceiptsBetween(getLoadedDailyReceipts(itemId), state.previousActualDate || getPreviousDate(state.date), state.date);
+  const receivedIn = round2(loggedIn + (hasEntry ? numOr0(entry.stockIn) : 0));
+  const stockIn = receivedIn > 0 ? receivedIn : null;
+  const broken = numOrNull(entry && entry.broken);
+  const lost = numOrNull(entry && entry.lost);
+  const spoilage = numOrNull(entry && entry.spoilage);
+  const wastage = numOrNull(entry && entry.wastage);
+
+  // Total out = everything that left stock since last count.
+  // Usage = what was genuinely consumed, i.e. total out minus the losses
+  // (breakage, lost, spoilage, wastage) that were reported separately.
+  let totalOut = null, usage = null;
+  if(prevCount !== null && hasEntry){
+    totalOut = round2(prevCount + (stockIn||0) - Number(entry.count));
+    usage = round2(totalOut - (broken||0) - (lost||0) - (spoilage||0) - (wastage||0));
+  }
+  return { hasEntry, lowNow, prevCount, stockIn, usage, totalOut, broken, lost, spoilage, wastage };
 }
 
 function getCommittedEntriesFor(item){
@@ -1366,7 +1573,10 @@ function hasDraft(itemId){
 }
 
 function renderItemCard(item){
+  const lossFields = LOSS_FIELDS[getItemType(item)] || [];
+  const allowDecimal = itemAllowsDecimal(item);
   const eff = getEffective(item.id);
+  const receivedTotal = round2(sumReceipts(getItemReceipts(item)) + numOr0(eff.stockIn));
   const count = eff.count !== undefined ? eff.count : '';
   const low = isLow(item.id, count);
   const filled = count !== '' && count !== undefined;
@@ -1377,7 +1587,7 @@ function renderItemCard(item){
   if(prevCount !== null){
     let deltaLine = `<span class="prev-count">Y'day: <strong>${prevCount}</strong></span>`;
     if(filled){
-      const diff = Number(count) - prevCount;
+      const diff = round2(Number(count) - prevCount);
       const sign = diff > 0 ? '+' : '';
       const cls = diff < 0 ? 'down' : (diff > 0 ? 'up' : 'flat');
       deltaLine += ` <span class="delta ${cls}">${sign}${diff}</span>`;
@@ -1398,17 +1608,16 @@ function renderItemCard(item){
     ${deltaHtml}
     <div class="stepper">
       <button class="dec" aria-label="Decrease">−</button>
-      <input type="text" inputmode="numeric" pattern="[0-9]*" class="count-input" value="${count}" placeholder="0">
+      <input type="text" inputmode="${allowDecimal?'decimal':'numeric'}" class="count-input" value="${count}" placeholder="0">
       <button class="inc" aria-label="Increase">+</button>
     </div>
-    ${item.isAsset ? `
-    <div class="asset-meta">
-      <input type="text" inputmode="numeric" pattern="[0-9]*" class="broken-input" placeholder="Broken" value="${eff.broken||''}">
-      <input type="text" inputmode="numeric" pattern="[0-9]*" class="lost-input" placeholder="Lost" value="${eff.lost||''}">
+    ${lossFields.length ? `
+    <div class="asset-meta loss-meta type-${getItemType(item)}">
+      ${lossFields.map(f=>`<input type="text" inputmode="${allowDecimal?'decimal':'numeric'}" class="loss-input" data-loss="${f.key}" placeholder="${f.label}" value="${eff[f.key]||''}">`).join('')}
     </div>
     ` : ''}
     <div class="item-meta">
-      <input type="text" inputmode="numeric" pattern="[0-9]*" class="stockin-input" placeholder="+ Stock In" value="${eff.stockIn||''}">
+      <button type="button" class="receive-btn">📦 ${receivedTotal > 0 ? 'Masuk ' + receivedTotal : 'Terima'}</button>
       <input type="text" class="remarks-input" placeholder="Notes..." value="${escapeHtml(eff.remarks||'')}">
     </div>
     ${pending ? `<div class="pending-note">Not submitted yet</div>` : ''}
@@ -1416,10 +1625,8 @@ function renderItemCard(item){
   `;
 
   const countInput = card.querySelector('.count-input');
-  const stockInInput = card.querySelector('.stockin-input');
   const remarksInput = card.querySelector('.remarks-input');
-  const brokenInput = card.querySelector('.broken-input');
-  const lostInput = card.querySelector('.lost-input');
+  const lossInputs = Array.from(card.querySelectorAll('.loss-input'));
   const decBtn = card.querySelector('.dec');
   const incBtn = card.querySelector('.inc');
 
@@ -1427,9 +1634,8 @@ function renderItemCard(item){
     state.drafts[item.id] = {
       count: countInput.value,
       remarks: remarksInput.value,
-      stockIn: stockInInput.value,
-      broken: brokenInput ? brokenInput.value : '',
-      lost: lostInput ? lostInput.value : '',
+      stockIn: eff.stockIn || '', // legacy manual value is preserved, no longer editable
+      ...Object.fromEntries(lossInputs.map(inp=>[inp.dataset.loss, inp.value])),
       itemName: item.name,
       itemUnit: item.unit,
     };
@@ -1458,7 +1664,7 @@ function renderItemCard(item){
       const deltaEl = card.querySelector('.delta-row');
       let line = `<span class="prev-count">Y'day: <strong>${prevCount}</strong></span>`;
       if(filledNow){
-        const diff = Number(val) - prevCount;
+        const diff = round2(Number(val) - prevCount);
         const sign = diff > 0 ? '+' : '';
         const cls = diff < 0 ? 'down' : (diff > 0 ? 'up' : 'flat');
         line += ` <span class="delta ${cls}">${sign}${diff}</span>`;
@@ -1470,36 +1676,30 @@ function renderItemCard(item){
     updateProgress();
   }
 
+  // Perishables are counted in kg, so they step by 0.5; everything else by 1.
+  const step = allowDecimal ? 0.5 : 1;
   decBtn.addEventListener('click', ()=>{
-    const cur = parseInt(countInput.value || '0', 10);
-    countInput.value = Math.max(0, cur - 1);
+    const cur = parseFloat(countInput.value || '0') || 0;
+    countInput.value = Math.max(0, round2(cur - step));
     markDraft();
   });
   incBtn.addEventListener('click', ()=>{
-    const cur = parseInt(countInput.value || '0', 10);
-    countInput.value = cur + 1;
+    const cur = parseFloat(countInput.value || '0') || 0;
+    countInput.value = round2(cur + step);
     markDraft();
   });
   countInput.addEventListener('input', ()=>{
-    countInput.value = countInput.value.replace(/[^0-9]/g,'');
+    countInput.value = sanitizeNumberInput(countInput.value, allowDecimal);
   });
-  stockInInput.addEventListener('input', ()=>{
-    stockInInput.value = stockInInput.value.replace(/[^0-9]/g,'');
+  const receiveBtn = card.querySelector('.receive-btn');
+  if(receiveBtn) receiveBtn.addEventListener('click', ()=> openReceiptModal(item));
+  lossInputs.forEach(inp=>{
+    inp.addEventListener('input', ()=>{
+      inp.value = sanitizeNumberInput(inp.value, allowDecimal);
+    });
+    inp.addEventListener('change', markDraft);
   });
-  if(brokenInput){
-    brokenInput.addEventListener('input', ()=>{
-      brokenInput.value = brokenInput.value.replace(/[^0-9]/g,'');
-    });
-    brokenInput.addEventListener('change', markDraft);
-  }
-  if(lostInput){
-    lostInput.addEventListener('input', ()=>{
-      lostInput.value = lostInput.value.replace(/[^0-9]/g,'');
-    });
-    lostInput.addEventListener('change', markDraft);
-  }
   countInput.addEventListener('change', markDraft);
-  stockInInput.addEventListener('change', markDraft);
   remarksInput.addEventListener('change', markDraft);
 
   return card;
@@ -1542,7 +1742,7 @@ function renderDailySummary(){
   const rows = reportItems.map(({id, deleted})=>{
     const entry = state.entries[id];
     const display = resolveItemDisplay(id, entry);
-    const { hasEntry, lowNow, prevCount, stockIn, usage, broken, lost } = computeDailyRowData(id, entry);
+    const { hasEntry, lowNow, prevCount, stockIn, usage, broken, lost, spoilage, wastage } = computeDailyRowData(id, entry);
     if(hasEntry) filled++;
     if(hasEntry){ if(lowNow) low++; else ok++; }
     let statusTag = '<span class="tag missing">Not filled</span>';
@@ -1551,8 +1751,11 @@ function renderDailySummary(){
 
     const prevCell = prevCount !== null ? prevCount : '—';
     const stockInCell = stockIn !== null ? `+${stockIn}` : '—';
-    const brokenCell = broken ? `<span class="delta down">${broken}</span>` : (broken === 0 ? '0' : '—');
-    const lostCell = lost ? `<span class="delta down">${lost}</span>` : (lost === 0 ? '0' : '—');
+    const lossCell = (v)=> v ? `<span class="delta down">${v}</span>` : (v === 0 ? '0' : '—');
+    const brokenCell = lossCell(broken);
+    const lostCell = lossCell(lost);
+    const spoilageCell = lossCell(spoilage);
+    const wastageCell = lossCell(wastage);
 
     let usageCell = '—';
     if(usage !== null){
@@ -1569,6 +1772,8 @@ function renderDailySummary(){
       <td>${stockInCell}</td>
       <td>${brokenCell}</td>
       <td>${lostCell}</td>
+      <td>${spoilageCell}</td>
+      <td>${wastageCell}</td>
       <td>${usageCell}</td>
       <td>${hasEntry ? escapeHtml(entry.staffName||'—') : '—'}</td>
       <td>${statusTag}</td>
@@ -1580,6 +1785,88 @@ function renderDailySummary(){
   document.getElementById('statTotal').textContent = `${filled}/${total}`;
   document.getElementById('statLow').textContent = low;
   document.getElementById('statOk').textContent = ok;
+}
+
+// Shared period math for DAILY-frequency items (Weekly/Monthly trend table
+// and the weekly exports), so they all agree:
+//   Used = opening + all stock-in in the period - last count - all losses
+// Before this, "Used" ignored stock-in, so any restock mid-week made it wrong.
+function computeDailyItemPeriod(id, dates, dataByDate, openingEntries, receiptList, prevDayDate){
+  const op = openingEntries[id];
+  const opening = hasCountValue(op) ? Number(op.count) : null;
+  let lastCount = null, lastDate = null, legacyIn = 0, losses = 0;
+  dates.forEach(dt=>{
+    const e = (dataByDate[dt] || {})[id];
+    if(!hasCountValue(e)) return;
+    lastCount = Number(e.count);
+    lastDate = dt;
+    legacyIn += numOr0(e.stockIn); // old manually-typed stock-in, if any
+    ALL_LOSS_KEYS.forEach(k=>{ losses += numOr0(e[k]); });
+  });
+  // Logged deliveries between the opening day and the last counted day.
+  const loggedIn = lastDate ? sumReceiptsBetween(receiptList, prevDayDate, lastDate) : 0;
+  const received = round2(legacyIn + loggedIn);
+  const used = (opening !== null && lastCount !== null) ? round2(opening + received - lastCount - losses) : null;
+  return { opening, lastCount, received, losses: round2(losses), used };
+}
+
+// Same idea for Weekly/Monthly-frequency items: one count per period, with
+// deliveries coming from the receiving log (plus any old single stock-in).
+function computePeriodItemRow(entry, openingEntry, receiptList){
+  const hasEntry = hasCountValue(entry);
+  const opening = hasCountValue(openingEntry) ? Number(openingEntry.count) : null;
+  const received = round2(sumReceipts(receiptList || []) + (hasEntry ? numOr0(entry.stockIn) : 0));
+  let totalOut = null, usage = null;
+  if(hasEntry && opening !== null){
+    totalOut = round2(opening + received - Number(entry.count));
+    usage = round2(totalOut - ALL_LOSS_KEYS.reduce((a, k)=> a + numOr0(entry[k]), 0));
+  }
+  return { hasEntry, opening, received, totalOut, usage };
+}
+
+// Loss & waste totals for a period. For daily-frequency items we also work
+// out "waste %": spoilage+wastage as a share of everything that left stock.
+// Per day, total out = previous count + stock in - today's count, using the
+// last known count as the opening (same idea as "Yesterday" skipping gaps).
+// Weekly/monthly-frequency items have one entry per period, so they get
+// totals only (no % — there's no day-by-day flow to measure against).
+function computeLossSummary(dates, dataByDate, openingEntries, periodEntries, periodFreqIds, dailyReceipts, prevDayDate){
+  const rows = [];
+  const num = (v)=> (v === undefined || v === '' || v === null) ? 0 : Number(v);
+  const hasCount = (e)=> e && e.count !== '' && e.count !== undefined;
+
+  getReportItemListMulti(dataByDate).forEach(({id, deleted})=>{
+    let prev = hasCount(openingEntries[id]) ? Number(openingEntries[id].count) : null;
+    let prevDate = prev !== null ? prevDayDate : null;
+    const recList = (dailyReceipts || {})[id] || [];
+    const tot = { broken:0, lost:0, spoilage:0, wastage:0 };
+    let totalOut = 0, wasteInBasis = 0, anyEntry = null;
+    dates.forEach(dt=>{
+      const e = (dataByDate[dt] || {})[id];
+      if(!hasCount(e)) return;
+      anyEntry = anyEntry || e;
+      ALL_LOSS_KEYS.forEach(k=>{ tot[k] += num(e[k]); });
+      const count = Number(e.count);
+      if(prev !== null){
+        totalOut += prev + num(e.stockIn) + sumReceiptsBetween(recList, prevDate, dt) - count;
+        wasteInBasis += num(e.spoilage) + num(e.wastage);
+      }
+      prev = count;
+      prevDate = dt;
+    });
+    rows.push({ id, deleted, entry:anyEntry, ...tot,
+      wastePct: (totalOut > 0 && (tot.spoilage + tot.wastage) > 0) ? Math.round(wasteInBasis / totalOut * 1000) / 10 : null });
+  });
+
+  periodFreqIds.forEach(({id, deleted})=>{
+    const e = periodEntries[id];
+    if(!hasCount(e)) return;
+    const tot = {};
+    ALL_LOSS_KEYS.forEach(k=>{ tot[k] = num(e[k]); });
+    rows.push({ id, deleted, entry:e, ...tot, wastePct:null });
+  });
+
+  return rows.filter(r=> ALL_LOSS_KEYS.some(k=> r[k] > 0));
 }
 
 async function renderPeriodSummary(){
@@ -1599,6 +1886,8 @@ async function renderPeriodSummary(){
   const fetchDates = isWeekly ? [...dates, prevDayDate] : dates;
   const dataByDate = await fetchEntriesBatch(fetchDates);
   const prevDayEntries = isWeekly ? (dataByDate[prevDayDate] || {}) : {};
+  const openingEntries = isWeekly ? prevDayEntries : ((await fetchEntriesBatch([prevDayDate]))[prevDayDate] || {});
+  const dailyReceipts = await loadDailyReceiptsForDates([prevDayDate, ...dates]);
 
   const staffLogRows = dates.map(dt=>{
     const dayEntries = dataByDate[dt] || {};
@@ -1631,30 +1920,17 @@ async function renderPeriodSummary(){
     for(const dt of dates){ if((dataByDate[dt]||{})[id]){ anyEntry = (dataByDate[dt]||{})[id]; break; } }
     const display = resolveItemDisplay(id, anyEntry);
 
-    let openingCell = '';
-    let usedCell = '';
-    if(isWeekly){
-      const openingEntry = prevDayEntries[id];
-      const hasOpening = openingEntry && openingEntry.count !== '' && openingEntry.count !== undefined;
-      const opening = hasOpening ? Number(openingEntry.count) : null;
-      openingCell = `<td class="opening-cell">${hasOpening ? opening : '–'}</td>`;
-
-      let lastCount = null;
-      for(let i=dates.length-1; i>=0; i--){
-        const e = (dataByDate[dates[i]]||{})[id];
-        if(e && e.count !== '' && e.count !== undefined){ lastCount = Number(e.count); break; }
-      }
-      const used = (hasOpening && lastCount !== null) ? (opening - lastCount) : null;
-      usedCell = `<td class="used-cell">${used !== null ? used : '—'}</td>`;
-    }
+    const period = computeDailyItemPeriod(id, dates, dataByDate, openingEntries, dailyReceipts[id], prevDayDate);
+    const openingCell = `<td class="opening-cell">${period.opening !== null ? period.opening : '–'}</td>`;
+    const usedCell = `<td class="used-cell">${period.used !== null ? period.used : '—'}</td>`;
 
     const nameLabel = deleted ? `${escapeHtml(display.name)} <span class="deleted-tag">deleted</span>` : escapeHtml(display.name);
-    return `<tr>${isWeekly?openingCell:''}<td class="item-col">${nameLabel}</td>${cells}${isWeekly?usedCell:''}</tr>`;
+    return `<tr>${openingCell}<td class="item-col">${nameLabel}</td>${cells}${usedCell}</tr>`;
   }).join('');
 
-  const openingHintHtml = isWeekly ? `
-    <div class="opening-hint">Opening = closing count from ${formatDayLabel(prevDayDate)} (previous week's last day), filled in automatically by staff on the Input tab.</div>
-  ` : '';
+  const openingHintHtml = `
+    <div class="opening-hint">Opening = closing count on ${formatDayLabel(prevDayDate)} (the day before this ${isWeekly?'week':'month'}). Used = Opening + Stock In − last count − losses (broken, lost, spoilage, wastage).</div>
+  `;
 
   // Weekly-frequency items (in the Weekly view) or Monthly-frequency items
   // (in the Monthly view) only have ONE value for the whole period, not a
@@ -1665,17 +1941,29 @@ async function renderPeriodSummary(){
   const periodItemsEntries = await loadKeyedEntries(periodItemsKey);
   const periodFreqItemsList = getFrequencyReportItemList(periodItemsEntries, periodItemFrequency);
 
+  const prevPeriodKey = isWeekly ? `entries:weekly:${weekMondayOf(prevDayDate)}` : `entries:monthly:${monthKeyOf(prevDayDate)}`;
+  const receiptsKey = isWeekly ? `receipts:weekly:${weekMondayOf(state.periodAnchorDate)}` : `receipts:monthly:${monthKeyOf(state.periodAnchorDate)}`;
+  const [prevPeriodEntries, receiptsData] = await Promise.all([ loadKeyedEntries(prevPeriodKey), loadKeyedEntries(receiptsKey) ]);
+
   const periodItemsRowsHtml = periodFreqItemsList.map(({id, deleted})=>{
     const entry = periodItemsEntries[id];
     const display = resolveItemDisplay(id, entry);
-    const hasEntry = entry && entry.count !== '' && entry.count !== undefined;
-    const lowNow = hasEntry && isLow(id, entry.count);
-    const statusTag = !hasEntry ? '<span class="tag missing">Not filled</span>' : (lowNow ? '<span class="tag low">Low</span>' : '<span class="tag ok">OK</span>');
+    const row = computePeriodItemRow(entry, prevPeriodEntries[id], receiptsData[id]);
+    const lowNow = row.hasEntry && isLow(id, entry.count);
+    const statusTag = !row.hasEntry ? '<span class="tag missing">Not filled</span>' : (lowNow ? '<span class="tag low">Low</span>' : '<span class="tag ok">OK</span>');
     const nameLabel = deleted ? `${escapeHtml(display.name)} <span class="deleted-tag">deleted</span>` : escapeHtml(display.name);
-    return `<tr class="${!hasEntry?'missing':(lowNow?'low':'')}">
+    let usageCell = '—';
+    if(row.usage !== null){
+      const cls = row.usage > 0 ? 'down' : (row.usage < 0 ? 'up' : 'flat');
+      usageCell = `<span class="delta ${cls}">${row.usage}</span>`;
+    }
+    return `<tr class="${!row.hasEntry?'missing':(lowNow?'low':'')}">
       <td>${nameLabel}</td>
-      <td>${hasEntry?entry.count:'—'}</td>
-      <td>${hasEntry?escapeHtml(entry.staffName||'—'):'—'}</td>
+      <td class="prev-value-cell">${row.opening !== null ? row.opening : '—'}</td>
+      <td>${row.received > 0 ? '+' + row.received : '—'}</td>
+      <td>${row.hasEntry ? entry.count : '—'}</td>
+      <td>${usageCell}</td>
+      <td>${row.hasEntry ? escapeHtml(entry.staffName||'—') : '—'}</td>
       <td>${statusTag}</td>
     </tr>`;
   }).join('');
@@ -1683,8 +1971,44 @@ async function renderPeriodSummary(){
   const periodItemsSectionHtml = periodFreqItemsList.length > 0 ? `
     <div class="subsection-title">${isWeekly?'📅 Weekly':'🗓️ Monthly'} Items <span class="section-hint">(this ${isWeekly?'week':'month'})</span></div>
     <table class="summary-table" style="margin-bottom:18px;">
-      <thead><tr><th>Item</th><th>Count</th><th>Staff</th><th>Status</th></tr></thead>
+      <thead><tr><th>Item</th><th>Opening</th><th>In</th><th>Count</th><th>Usage</th><th>Staff</th><th>Status</th></tr></thead>
       <tbody>${periodItemsRowsHtml}</tbody>
+    </table>
+  ` : '';
+
+  // Receiving log: every delivery logged for weekly/monthly items this period.
+  const receiptRows = [];
+  Object.keys(receiptsData).forEach(itemId=>{
+    (receiptsData[itemId] || []).forEach(r=> receiptRows.push({ itemId, ...r }));
+  });
+  const periodDateSet = new Set(dates);
+  Object.keys(dailyReceipts).forEach(itemId=>{
+    dailyReceipts[itemId].filter(r=> periodDateSet.has(r.date)).forEach(r=> receiptRows.push({ itemId, ...r }));
+  });
+  receiptRows.sort((a,b)=> (a.timestamp||'').localeCompare(b.timestamp||''));
+  const receiptsSectionHtml = receiptRows.length > 0 ? `
+    <div class="subsection-title">📦 Receiving Log <span class="section-hint">(semua barang masuk periode ini)</span></div>
+    <table class="summary-table" style="margin-bottom:18px;">
+      <thead><tr><th>Date</th><th>Item</th><th>Qty</th><th>Received by</th></tr></thead>
+      <tbody>${receiptRows.map(r=>{
+        const anyEntry = periodItemsEntries[r.itemId] || dates.map(d=> (dataByDate[d] || {})[r.itemId]).find(Boolean);
+        const display = resolveItemDisplay(r.itemId, anyEntry);
+        return `<tr><td>${formatShort(r.date)}</td><td>${escapeHtml(display.name)}</td><td>+${escapeHtml(r.qty)} ${escapeHtml(display.unit)}</td><td>${escapeHtml(r.staffName||'—')}</td></tr>`;
+      }).join('')}</tbody>
+    </table>
+  ` : '';
+
+  const lossRows = computeLossSummary(dates, dataByDate, openingEntries, periodItemsEntries, periodFreqItemsList, dailyReceipts, prevDayDate);
+  const lossCell = (v)=> v > 0 ? `<span class="delta down">${round2(v)}</span>` : '—';
+  const lossSectionHtml = lossRows.length > 0 ? `
+    <div class="subsection-title">Losses &amp; Waste <span class="section-hint">(broken, lost, spoilage, wastage)</span></div>
+    <table class="summary-table" style="margin-bottom:18px;">
+      <thead><tr><th>Item</th><th>Broken</th><th>Lost</th><th>Spoilage</th><th>Wastage</th><th>Waste %</th></tr></thead>
+      <tbody>${lossRows.map(r=>{
+        const display = resolveItemDisplay(r.id, r.entry);
+        const nameLabel = r.deleted ? `${escapeHtml(display.name)} <span class="deleted-tag">deleted</span>` : escapeHtml(display.name);
+        return `<tr><td>${nameLabel}</td><td>${lossCell(r.broken)}</td><td>${lossCell(r.lost)}</td><td>${lossCell(r.spoilage)}</td><td>${lossCell(r.wastage)}</td><td>${r.wastePct !== null ? r.wastePct + '%' : '—'}</td></tr>`;
+      }).join('')}</tbody>
     </table>
   ` : '';
 
@@ -1703,18 +2027,20 @@ async function renderPeriodSummary(){
       <tbody>${staffLogRows}</tbody>
     </table>
     ${periodItemsSectionHtml}
+    ${receiptsSectionHtml}
+    ${lossSectionHtml}
     <div class="subsection-title">Stock Trend by Item</div>
     ${openingHintHtml}
     <div class="trend-scroll">
       <table class="summary-table trend-table">
-        <thead><tr>${isWeekly?'<th>Opening</th>':''}<th class="item-col">Item</th>${trendHeader}${isWeekly?'<th>Used</th>':''}</tr></thead>
+        <thead><tr><th>Opening</th><th class="item-col">Item</th>${trendHeader}<th>Used</th></tr></thead>
         <tbody>${trendRows}</tbody>
       </table>
     </div>
   `;
 
   if(isWeekly){
-    state.lastWeeklyData = { dates, dataByDate, prevDayEntries, weekStartDate, prevDayDate };
+    state.lastWeeklyData = { dates, dataByDate, prevDayEntries, weekStartDate, prevDayDate, dailyReceipts };
     const pdfBtn = document.getElementById('exportWeeklyPdfBtn');
     if(pdfBtn) pdfBtn.addEventListener('click', exportWeeklyPDF);
     const csvBtn = document.getElementById('exportWeeklyCsvBtn');
@@ -1786,7 +2112,7 @@ function renderManageItemsList(){
       row.innerHTML = `
         <div class="manage-info">
           <div class="manage-name">${escapeHtml(item.name)}</div>
-          <div class="manage-sub">${escapeHtml(cat.name)} · ${escapeHtml(item.unit)}${item.isAsset ? ' · <span class="deleted-tag" style="color:var(--warn);">asset</span>' : ''}</div>
+          <div class="manage-sub">${escapeHtml(cat.name)} · ${escapeHtml(item.unit)}${getItemType(item) !== 'consumable' ? ` · <span class="deleted-tag" style="color:var(--warn);">${getItemType(item)}</span>` : ''}</div>
         </div>
         <div class="manage-actions">
           <button class="edit-btn" aria-label="Edit item">✎</button>
@@ -1815,10 +2141,11 @@ function toggleEditItemRow(row, item){
   form.innerHTML = `
     <input type="text" class="edit-name-input" value="${escapeHtml(item.name)}" placeholder="Item name">
     <input type="text" class="edit-unit-input" value="${escapeHtml(item.unit)}" placeholder="Unit">
-    <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text-dim);">
-      <input type="checkbox" class="edit-asset-input" style="width:auto;" ${item.isAsset?'checked':''}>
-      Asset (track Broken/Lost)
-    </label>
+    <select class="edit-type-input">
+      <option value="consumable" ${getItemType(item)==='consumable'?'selected':''}>Type: Consumable</option>
+      <option value="asset" ${getItemType(item)==='asset'?'selected':''}>Type: Asset (Broken/Lost)</option>
+      <option value="perishable" ${getItemType(item)==='perishable'?'selected':''}>Type: Perishable (Spoilage/Wastage)</option>
+    </select>
     <div class="edit-item-actions">
       <button class="btn edit-save-btn">Save</button>
       <button class="btn edit-cancel-btn">Cancel</button>
@@ -1830,14 +2157,15 @@ function toggleEditItemRow(row, item){
   form.querySelector('.edit-save-btn').addEventListener('click', async ()=>{
     const newName = form.querySelector('.edit-name-input').value.trim();
     const newUnit = form.querySelector('.edit-unit-input').value.trim();
-    const newIsAsset = form.querySelector('.edit-asset-input').checked;
+    const newType = form.querySelector('.edit-type-input').value;
     if(!newName){ showToast('Item name cannot be empty'); return; }
     const ok = await saveConfig((cfg)=>{
       const target = cfg.items.find(i=>i.id===item.id);
       if(target){
         target.name = newName;
         target.unit = newUnit || target.unit;
-        target.isAsset = newIsAsset;
+        target.type = newType;
+        delete target.isAsset; // superseded by type
       }
     });
     if(ok){
@@ -1878,21 +2206,21 @@ async function addNewItem(){
   const unitInput = document.getElementById('newItemUnit');
   const catSelect = document.getElementById('newItemCategory');
   const freqSelect = document.getElementById('newItemFrequency');
-  const assetCheckbox = document.getElementById('newItemIsAsset');
+  const typeSelect = document.getElementById('newItemType');
   const name = nameInput.value.trim();
   if(!name){ showToast('Enter an item name first'); return; }
   if(state.categories.length === 0){ showToast('Add a category first'); return; }
   const unit = unitInput.value.trim() || 'pcs';
   const category = catSelect.value;
   const frequency = freqSelect.value || 'daily';
-  const isAsset = assetCheckbox.checked;
+  const type = typeSelect.value || 'consumable';
   nameInput.value = '';
   unitInput.value = '';
-  assetCheckbox.checked = false;
+  typeSelect.value = 'consumable';
 
   const ok = await saveConfig((cfg)=>{
     const id = slugify(name, cfg.items.map(i=>i.id));
-    cfg.items.push({ id, name, unit, category, frequency, isAsset });
+    cfg.items.push({ id, name, unit, category, frequency, type });
   });
   if(ok){
     showToast(`"${name}" added`);
@@ -1996,7 +2324,7 @@ async function exportWeeklyCSV(){
   }
 
   try{
-    const { dates, dataByDate, prevDayEntries } = data;
+    const { dates, dataByDate, prevDayEntries, dailyReceipts, prevDayDate } = data;
     const header = ['Item','Unit','Opening', ...dates.map(dt=>formatShort(dt)), 'Used'];
 
     const rows = getReportItemListMulti(dataByDate).map(({id, deleted})=>{
@@ -2015,7 +2343,8 @@ async function exportWeeklyCSV(){
         const e = (dataByDate[dates[i]]||{})[id];
         if(e && e.count !== '' && e.count !== undefined){ lastCount = Number(e.count); break; }
       }
-      const used = (hasOpening && lastCount !== null) ? (opening-lastCount) : '';
+      const usedCalc = computeDailyItemPeriod(id, dates, dataByDate, prevDayEntries, (dailyReceipts||{})[id], prevDayDate).used;
+      const used = usedCalc !== null ? usedCalc : '';
 
       let anyEntry = null;
       for(const dt of dates){ if((dataByDate[dt]||{})[id]){ anyEntry = (dataByDate[dt]||{})[id]; break; } }
@@ -2054,11 +2383,11 @@ async function exportCSV(){
   }
 
   try{
-    const header = ['Item','Unit', getPreviousLabel(), formatShort(state.date), 'Stock In','Broken','Lost','Usage','Staff','Remarks','Status'];
+    const header = ['Item','Unit', getPreviousLabel(), formatShort(state.date), 'Stock In','Broken','Lost','Spoilage','Wastage','Usage','Staff','Remarks','Status'];
     const rows = getReportItemList(state.entries).map(({id, deleted})=>{
       const entry = state.entries[id];
       const display = resolveItemDisplay(id, entry);
-      const { hasEntry, lowNow, prevCount, stockIn, usage, broken, lost } = computeDailyRowData(id, entry);
+      const { hasEntry, lowNow, prevCount, stockIn, usage, broken, lost, spoilage, wastage } = computeDailyRowData(id, entry);
       const status = !hasEntry ? 'Not filled' : (lowNow ? 'Low' : 'OK');
       return [
         display.name + (deleted ? ' (deleted)' : ''),
@@ -2068,6 +2397,8 @@ async function exportCSV(){
         stockIn !== null ? stockIn : '',
         broken !== null ? broken : '',
         lost !== null ? lost : '',
+        spoilage !== null ? spoilage : '',
+        wastage !== null ? wastage : '',
         usage !== null ? usage : '',
         hasEntry ? (entry.staffName||'') : '',
         hasEntry ? (entry.remarks||'') : '',
@@ -2076,7 +2407,7 @@ async function exportCSV(){
     });
 
     const ws = XLSX.utils.aoa_to_sheet([header, ...rows]);
-    ws['!cols'] = [{wch:26},{wch:10},{wch:10},{wch:10},{wch:9},{wch:8},{wch:8},{wch:8},{wch:14},{wch:24},{wch:10}];
+    ws['!cols'] = [{wch:26},{wch:10},{wch:10},{wch:10},{wch:9},{wch:8},{wch:8},{wch:10},{wch:10},{wch:8},{wch:14},{wch:24},{wch:10}];
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Daily');
     XLSX.writeFile(wb, `inventory-${state.date}.xlsx`);
@@ -2208,7 +2539,7 @@ async function exportDailyPDF(){
 
   try{
     const { jsPDF } = window.jspdf;
-    const doc = new jsPDF({unit:'mm', format:'a4'});
+    const doc = new jsPDF({unit:'mm', format:'a4', orientation:'landscape'});
 
     const dateLabel = new Date(state.date+'T00:00:00').toLocaleDateString('en-GB', {weekday:'long', day:'2-digit', month:'long', year:'numeric'});
     addPdfHeader(doc, 'Daily Consumption Report', `${dateLabel}  ·  Support Equipment Inventory`);
@@ -2218,7 +2549,7 @@ async function exportDailyPDF(){
     const rows = reportItems.map(({id, deleted})=>{
       const entry = state.entries[id];
       const display = resolveItemDisplay(id, entry);
-      const { hasEntry, lowNow, prevCount, stockIn, usage, broken, lost } = computeDailyRowData(id, entry);
+      const { hasEntry, lowNow, prevCount, stockIn, usage, broken, lost, spoilage, wastage } = computeDailyRowData(id, entry);
       if(hasEntry){ filled++; lowNow ? low++ : ok++; }
       const status = !hasEntry ? 'Not filled' : (lowNow ? 'Low Stock' : 'OK');
       return [
@@ -2229,6 +2560,8 @@ async function exportDailyPDF(){
         stockIn !== null ? `+${stockIn}` : '—',
         broken !== null ? String(broken) : '—',
         lost !== null ? String(lost) : '—',
+        spoilage !== null ? String(spoilage) : '—',
+        wastage !== null ? String(wastage) : '—',
         usage === null ? '—' : String(usage),
         hasEntry ? (entry.staffName||'—') : '—',
         status,
@@ -2240,13 +2573,13 @@ async function exportDailyPDF(){
 
     doc.autoTable({
       startY: 38,
-      head: [['Item','Unit', getPreviousLabel(), formatShort(state.date), 'Stock In','Broken','Lost','Usage','Staff','Status']],
+      head: [['Item','Unit', getPreviousLabel(), formatShort(state.date), 'Stock In','Broken','Lost','Spoilage','Wastage','Usage','Staff','Status']],
       body: rows,
       styles:{ fontSize:8, cellPadding:2 },
       headStyles:{ fillColor:[38,44,32], textColor:255, fontStyle:'bold' },
       alternateRowStyles:{ fillColor:[245,245,242] },
       didParseCell: (data)=>{
-        if(data.section==='body' && data.column.index===9){
+        if(data.section==='body' && data.column.index===11){
           const val = data.cell.raw;
           if(val==='Low Stock'){ data.cell.styles.textColor=[163,51,82]; data.cell.styles.fontStyle='bold'; }
           else if(val==='OK'){ data.cell.styles.textColor=[110,140,60]; data.cell.styles.fontStyle='bold'; }
@@ -2285,7 +2618,7 @@ async function exportWeeklyPDF(){
   }
 
   try{
-    const { dates, dataByDate, prevDayEntries } = data;
+    const { dates, dataByDate, prevDayEntries, dailyReceipts, prevDayDate } = data;
     const { jsPDF } = window.jspdf;
     const doc = new jsPDF({unit:'mm', format:'a4', orientation:'landscape'});
 
@@ -2335,7 +2668,8 @@ async function exportWeeklyPDF(){
         const e = (dataByDate[dates[i]]||{})[id];
         if(e && e.count !== '' && e.count !== undefined){ lastCount = Number(e.count); break; }
       }
-      const used = (hasOpening && lastCount !== null) ? (opening-lastCount) : null;
+      const usedCalc = computeDailyItemPeriod(id, dates, dataByDate, prevDayEntries, (dailyReceipts||{})[id], prevDayDate).used;
+      const used = usedCalc;
 
       let anyEntry = null;
       for(const dt of dates){ if((dataByDate[dt]||{})[id]){ anyEntry = (dataByDate[dt]||{})[id]; break; } }
@@ -2491,6 +2825,11 @@ function bindStaticListeners(){
 
   document.getElementById('exportBtn').addEventListener('click', exportCSV);
 
+  document.getElementById('receiptSave').addEventListener('click', saveReceiptFromModal);
+  document.getElementById('receiptClose').addEventListener('click', closeReceiptModal);
+  document.getElementById('receiptQty').addEventListener('keydown', (e)=>{ if(e.key === 'Enter') saveReceiptFromModal(); });
+  document.getElementById('receiptModal').addEventListener('click', (e)=>{ if(e.target.id === 'receiptModal') closeReceiptModal(); });
+
   document.querySelectorAll('.input-tab').forEach(tab=>{
     tab.addEventListener('click', ()=>{
       document.querySelectorAll('.input-tab').forEach(t=>t.classList.remove('active'));
@@ -2545,6 +2884,94 @@ function bindStaticListeners(){
 
   document.getElementById('addItemBtn').addEventListener('click', addNewItem);
   document.getElementById('addCategoryBtn').addEventListener('click', addNewCategory);
+}
+
+// ---- "Terima barang" popup --------------------------------------------
+let receiptItemId = null;
+
+function openReceiptModal(item){
+  receiptItemId = item.id;
+  const freq = getItemFrequency(item);
+  const periodLabel = freq === 'monthly'
+    ? formatMonthYear(state.date)
+    : (()=>{ const w = getWeekRange(state.date); return `${formatShort(w[0])} – ${formatShort(w[6])}`; })();
+  document.getElementById('receiptTitle').textContent = `📦 Terima barang — ${item.name}`;
+  document.getElementById('receiptSub').textContent = freq === 'daily'
+    ? `Dicatat tanggal ${formatDayLabel(state.date)}`
+    : `Dicatat tanggal ${formatDayLabel(state.date)} · periode ${periodLabel}`;
+  const qty = document.getElementById('receiptQty');
+  qty.value = '';
+  qty.setAttribute('inputmode', itemAllowsDecimal(item) ? 'decimal' : 'numeric');
+  document.getElementById('receiptError').classList.add('hidden');
+  renderReceiptList(item);
+  document.getElementById('receiptModal').classList.remove('hidden');
+  setTimeout(()=> qty.focus(), 50);
+}
+
+function closeReceiptModal(){
+  document.getElementById('receiptModal').classList.add('hidden');
+  receiptItemId = null;
+}
+
+function renderReceiptList(item){
+  const list = getItemReceipts(item).slice().sort((a,b)=> (a.timestamp||'').localeCompare(b.timestamp||''));
+  const el = document.getElementById('receiptList');
+  if(list.length === 0){
+    el.innerHTML = '<div class="receipt-empty">Belum ada barang masuk.</div>';
+    return;
+  }
+  const canDelete = state.userTier !== 'staff';
+  el.innerHTML = list.map(r=>`
+    <div class="receipt-row">
+      <span class="receipt-date">${formatShort(r.date)}</span>
+      <span class="receipt-qty">+${escapeHtml(r.qty)}</span>
+      <span class="receipt-who">${escapeHtml(r.staffName||'—')}</span>
+      ${canDelete ? `<button type="button" class="receipt-del" data-id="${escapeHtml(r.id)}" aria-label="Hapus">✕</button>` : ''}
+    </div>`).join('') + `<div class="receipt-total">Total masuk: ${sumReceipts(list)} ${escapeHtml(item.unit)}</div>`;
+  el.querySelectorAll('.receipt-del').forEach(btn=>{
+    btn.addEventListener('click', async ()=>{
+      if(!confirm('Hapus catatan barang masuk ini?')) return;
+      btn.disabled = true;
+      const ok = await removeReceipt(item, btn.dataset.id);
+      if(ok){ renderReceiptList(item); renderInputView(); showToast('Catatan dihapus'); }
+      else { btn.disabled = false; showToast('❌ Gagal menghapus, coba lagi', 3000); }
+    });
+  });
+}
+
+async function saveReceiptFromModal(){
+  const item = state.items.find(i=> i.id === receiptItemId);
+  if(!item) return;
+  const errEl = document.getElementById('receiptError');
+  errEl.classList.add('hidden');
+  if(!getStaffName()){
+    errEl.textContent = 'Isi nama kamu dulu di bagian atas.';
+    errEl.classList.remove('hidden');
+    return;
+  }
+  const raw = sanitizeNumberInput(document.getElementById('receiptQty').value, itemAllowsDecimal(item));
+  const qty = Number(raw);
+  if(!raw || !isFinite(qty) || qty <= 0){
+    errEl.textContent = 'Masukkan jumlah yang lebih dari 0.';
+    errEl.classList.remove('hidden');
+    return;
+  }
+  const btn = document.getElementById('receiptSave');
+  const original = btn.textContent;
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner-sm"></span>Menyimpan...';
+  const ok = await addReceipt(item, String(qty));
+  btn.disabled = false;
+  btn.textContent = original;
+  if(ok){
+    document.getElementById('receiptQty').value = '';
+    renderReceiptList(item);
+    renderInputView(); // refresh the "Masuk N" label on the card; drafts are kept
+    showToast(`✅ +${qty} ${item.unit} dicatat`, 2500);
+  }else{
+    errEl.textContent = 'Gagal menyimpan. Cek koneksi lalu coba lagi — data belum tersimpan.';
+    errEl.classList.remove('hidden');
+  }
 }
 
 // Reads ?nickname=...&tier=... from the URL — set by the Reload F&B Tools
