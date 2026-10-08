@@ -173,6 +173,30 @@ main{padding:14px 16px 8px;max-width:640px;margin:0 auto;}
 .item-meta{display:flex;gap:6px;margin-top:6px;}
 .item-meta input{font-size:10.5px;padding:6px 7px;}
 .item-meta .remarks-input{flex:1;min-width:0;}
+.dept-chip{
+  margin-left:auto;background:var(--surface-2);color:var(--accent);border:1px solid var(--accent-dim);
+  border-radius:99px;padding:6px 12px;font-size:11.5px;font-weight:700;font-family:'Poppins',sans-serif;white-space:nowrap;
+}
+.dept-picker{
+  position:fixed;inset:0;z-index:200;background:var(--bg);
+  display:flex;align-items:center;justify-content:center;padding:24px;
+}
+.dept-picker.hidden{display:none;}
+.dept-picker-inner{width:100%;max-width:380px;display:flex;flex-direction:column;gap:12px;}
+.dept-greeting{font-size:22px;font-weight:700;text-align:center;}
+.dept-sub{font-size:12.5px;color:var(--text-dim);text-align:center;margin-bottom:8px;}
+.dept-option{
+  background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:14px;
+  padding:20px;font-size:18px;font-weight:700;font-family:'Poppins',sans-serif;
+}
+.dept-option:active,.dept-option.current{background:var(--accent);color:#0D0D0D;border-color:var(--accent);}
+.dept-option.dept-all{font-size:14px;padding:14px;color:var(--text-dim);}
+.dept-cancel{background:none;border:none;color:var(--text-dim);text-decoration:underline;font-size:13px;padding:8px;}
+.dept-unset-hint{font-size:11.5px;color:var(--warn);margin:0 0 10px;line-height:1.5;}
+.dept-unset-hint:empty{display:none;}
+.summary-dept-row{display:flex;align-items:center;gap:10px;margin-bottom:12px;}
+.summary-dept-row label{font-size:11px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.04em;}
+.summary-dept-row select{flex:1;}
 .receive-btn{
   flex:0 0 auto;background:var(--surface-2);color:var(--accent);border:1px solid var(--accent-dim);
   border-radius:8px;padding:6px 8px;font-size:10.5px;font-weight:700;font-family:'Poppins',sans-serif;white-space:nowrap;
@@ -454,8 +478,9 @@ nav.bottom .icon{font-size:18px;}
     </div>
     <div class="brand-text">
       <h1>Daily Consumption</h1>
-      <div class="sub">Support Equipment Inventory · <span id="appVersion">v2.4</span></div>
+      <div class="sub">Support Equipment Inventory · <span id="appVersion">v2.5</span></div>
     </div>
+    <button type="button" class="dept-chip hidden" id="deptChip"></button>
   </div>
   <div class="field-row">
     <div class="field">
@@ -491,6 +516,15 @@ nav.bottom .icon{font-size:18px;}
 
   <!-- SUMMARY VIEW -->
   <div class="view" id="view-summary">
+    <div class="summary-dept-row">
+      <label for="summaryDept">Departemen</label>
+      <select id="summaryDept">
+        <option value="all">Semua departemen</option>
+        <option value="service">Service</option>
+        <option value="kitchen">Kitchen</option>
+        <option value="bar">Bar</option>
+      </select>
+    </div>
     <div class="period-tabs">
       <button class="period-tab active" data-period="daily">Daily</button>
       <button class="period-tab" data-period="weekly">Weekly</button>
@@ -547,6 +581,14 @@ nav.bottom .icon{font-size:18px;}
           </select>
         </div>
         <div class="add-form-row">
+          <select id="newItemDept" style="flex:1;">
+            <option value="all">Dept: Semua (dihitung siapa aja)</option>
+            <option value="service">Dept: Service</option>
+            <option value="kitchen">Dept: Kitchen</option>
+            <option value="bar">Dept: Bar</option>
+          </select>
+        </div>
+        <div class="add-form-row">
           <select id="newItemType" style="flex:1;">
             <option value="consumable">Type: Consumable (tisu, saus, kantong)</option>
             <option value="asset">Type: Asset (cutlery, gelas, linen) — Broken/Lost</option>
@@ -556,6 +598,7 @@ nav.bottom .icon{font-size:18px;}
         <button class="btn primary" id="addItemBtn">+ Add Item</button>
       </div>
       <div class="subsection-title">Reorder / Remove Items</div>
+      <div id="deptUnsetHint" class="dept-unset-hint"></div>
       <div id="manageItemsList"></div>
     </div>
 
@@ -579,7 +622,7 @@ nav.bottom .icon{font-size:18px;}
     </div>
 
     <div style="text-align:center;margin-top:24px;padding-top:16px;border-top:1px solid var(--border);color:var(--text-dim);font-size:10.5px;font-family:'Poppins',monospace;">
-      Daily Consumption <span id="settingsAppVersion">v2.4</span>
+      Daily Consumption <span id="settingsAppVersion">v2.5</span>
     </div>
   </div>
 
@@ -597,6 +640,18 @@ nav.bottom .icon{font-size:18px;}
       <button class="btn" id="passwordCancel">Cancel</button>
       <button class="btn primary" id="passwordSubmit">Unlock</button>
     </div>
+  </div>
+</div>
+
+<div class="dept-picker hidden" id="deptPicker">
+  <div class="dept-picker-inner">
+    <div class="dept-greeting" id="deptGreeting">Pilih departemen</div>
+    <div class="dept-sub">Item yang muncul akan disesuaikan dengan departemen kamu.</div>
+    <button type="button" class="dept-option" data-dept="service">🍽️ Service</button>
+    <button type="button" class="dept-option" data-dept="kitchen">👨‍🍳 Kitchen</button>
+    <button type="button" class="dept-option" data-dept="bar">🍹 Bar</button>
+    <button type="button" class="dept-option dept-all" data-dept="all" id="deptAllBtn">📋 Semua departemen</button>
+    <button type="button" class="dept-cancel hidden" id="deptCancel">Batal</button>
   </div>
 </div>
 
@@ -664,7 +719,7 @@ window.storage = {
 // Bump this whenever a meaningful update is shipped, so anyone opening the
 // app can quickly tell whether they're on the latest version (visible in
 // the header and at the bottom of Settings).
-const APP_VERSION = 'v2.4';
+const APP_VERSION = 'v2.5';
 
 const DEFAULT_ITEMS = [
   {id:'byo_menu', name:'BYO Menu', unit:'pack (500pcs)', category:'misc'},
@@ -722,6 +777,9 @@ let state = {
   items: [],        // mutable copy of DEFAULT_ITEMS, editable via Settings
   categories: [],   // mutable copy of DEFAULT_CATEGORIES, editable via Settings
   expandedCategories: new Set(), // tracks which categories are OPEN; empty = all collapsed by default
+  dept: null,          // department this device is counting for: service / kitchen / bar / all (null until picked)
+  summaryDept: 'all',  // department filter for Summary & exports
+  ready: false,        // true once the first data load has finished
   inputTab: 'daily', // which Input sub-tab is active: daily / weekly / monthly
   staffNameLocked: false, // true when nickname came from the launcher (not editable)
   userTier: null, // 'staff' or other tier string, from the launcher; null = accessed directly (no identity)
@@ -868,6 +926,33 @@ const LOSS_FIELDS = {
   ],
 };
 const ALL_LOSS_KEYS = ['broken','lost','spoilage','wastage'];
+
+// ---- Departments ---------------------------------------------------------
+// Each item belongs to one department (service / kitchen / bar) or to 'all'
+// (shared, counted by whoever gets to it). Items saved before departments
+// existed have no dept and behave as 'all', so nothing disappears.
+const DEPT_LABELS = { service:'Service', kitchen:'Kitchen', bar:'Bar', all:'Semua departemen' };
+function getItemDept(item){ return item.dept || 'all'; }
+function visibleForDept(item, dept){
+  const d = dept || 'all';
+  const id = getItemDept(item);
+  return d === 'all' || id === 'all' || id === d;
+}
+// Summary/exports are filtered by the department picked in the Summary tab.
+function reportDept(){ return state.summaryDept || 'all'; }
+// An item deleted from Settings can't be looked up anymore, so use the
+// department stamped on its entry when it was counted. Old entries without
+// a stamp show everywhere (they were shared before departments existed).
+function deletedItemVisible(entry){
+  const d = reportDept();
+  if(d === 'all') return true;
+  const snap = entry && entry.itemDept;
+  return !snap || snap === 'all' || snap === d;
+}
+function isIdVisibleInReport(id, entry){
+  const item = state.items.find(i=> i.id === id);
+  return item ? visibleForDept(item, reportDept()) : deletedItemVisible(entry);
+}
 
 function itemAllowsDecimal(item){
   return getItemType(item) === 'perishable';
@@ -1423,7 +1508,7 @@ function renderInputView(){
 
 function renderCategorizedItems(container, frequency, query){
   state.categories.forEach(cat=>{
-    let catItems = state.items.filter(i=>i.category===cat.id && getItemFrequency(i)===frequency);
+    let catItems = state.items.filter(i=>i.category===cat.id && getItemFrequency(i)===frequency && visibleForDept(i, state.dept));
     if(query){
       catItems = catItems.filter(i=> i.name.toLowerCase().includes(query));
       if(catItems.length === 0) return; // hide empty categories while searching
@@ -1460,13 +1545,13 @@ function renderCategorizedItems(container, frequency, query){
 function getReportItemListMulti(dataByDate){
   const liveDailyItems = state.items.filter(i=> getItemFrequency(i) === 'daily');
   const liveIds = new Set(liveDailyItems.map(i=>i.id));
-  const list = liveDailyItems.map(i=>({ id:i.id, deleted:false }));
+  const list = liveDailyItems.filter(i=> visibleForDept(i, reportDept())).map(i=>({ id:i.id, deleted:false }));
   const seenDeleted = new Set();
   Object.values(dataByDate || {}).forEach(entriesObj=>{
     Object.keys(entriesObj || {}).forEach(itemId=>{
       if(!liveIds.has(itemId) && !seenDeleted.has(itemId)){
-        list.push({ id:itemId, deleted:true });
         seenDeleted.add(itemId);
+        if(deletedItemVisible(entriesObj[itemId])) list.push({ id:itemId, deleted:true });
       }
     });
   });
@@ -1492,11 +1577,11 @@ function resolveItemDisplay(itemId, entry){
 function getFrequencyReportItemList(entriesObj, frequency){
   const liveItems = state.items.filter(i=> getItemFrequency(i) === frequency);
   const liveIds = new Set(liveItems.map(i=>i.id));
-  const list = liveItems.map(i=>({ id:i.id, deleted:false }));
+  const list = liveItems.filter(i=> visibleForDept(i, reportDept())).map(i=>({ id:i.id, deleted:false }));
   Object.keys(entriesObj || {}).forEach(itemId=>{
     if(!liveIds.has(itemId)){
-      list.push({ id:itemId, deleted:true });
       liveIds.add(itemId);
+      if(deletedItemVisible(entriesObj[itemId])) list.push({ id:itemId, deleted:true });
     }
   });
   return list;
@@ -1505,11 +1590,11 @@ function getFrequencyReportItemList(entriesObj, frequency){
 function getReportItemList(entriesObj){
   const liveDailyItems = state.items.filter(i=> getItemFrequency(i) === 'daily');
   const liveIds = new Set(liveDailyItems.map(i=>i.id));
-  const list = liveDailyItems.map(i=>({ id:i.id, deleted:false }));
+  const list = liveDailyItems.filter(i=> visibleForDept(i, reportDept())).map(i=>({ id:i.id, deleted:false }));
   Object.keys(entriesObj || {}).forEach(itemId=>{
     if(!liveIds.has(itemId)){
-      list.push({ id:itemId, deleted:true });
       liveIds.add(itemId); // avoid duplicates if it appears in multiple places
+      if(deletedItemVisible(entriesObj[itemId])) list.push({ id:itemId, deleted:true });
     }
   });
   return list;
@@ -1638,6 +1723,7 @@ function renderItemCard(item){
       ...Object.fromEntries(lossInputs.map(inp=>[inp.dataset.loss, inp.value])),
       itemName: item.name,
       itemUnit: item.unit,
+      itemDept: getItemDept(item),
     };
     refreshCardVisual();
     updateSubmitButton();
@@ -1706,14 +1792,14 @@ function renderItemCard(item){
 }
 
 function updateCategoryBadge(catId){
-  const catItems = state.items.filter(i=>i.category===catId && getItemFrequency(i)===state.inputTab);
+  const catItems = state.items.filter(i=>i.category===catId && getItemFrequency(i)===state.inputTab && visibleForDept(i, state.dept));
   const filledCount = catItems.filter(i=> isFilled(i.id)).length;
   const header = document.querySelector(`.category-header[data-cat="${catId}"] .count-badge`);
   if(header) header.textContent = `${filledCount}/${catItems.length}`;
 }
 
 function updateProgress(){
-  const tabItems = state.items.filter(i=> getItemFrequency(i) === state.inputTab);
+  const tabItems = state.items.filter(i=> getItemFrequency(i) === state.inputTab && visibleForDept(i, state.dept));
   const total = tabItems.length;
   const filled = tabItems.filter(i=> isFilled(i.id)).length;
   document.getElementById('progressFill').style.width = total ? `${(filled/total*100).toFixed(0)}%` : '0%';
@@ -1985,6 +2071,8 @@ async function renderPeriodSummary(){
   Object.keys(dailyReceipts).forEach(itemId=>{
     dailyReceipts[itemId].filter(r=> periodDateSet.has(r.date)).forEach(r=> receiptRows.push({ itemId, ...r }));
   });
+  const visibleReceiptRows = receiptRows.filter(r=> isIdVisibleInReport(r.itemId, periodItemsEntries[r.itemId] || dates.map(d=> (dataByDate[d] || {})[r.itemId]).find(Boolean)));
+  receiptRows.length = 0; receiptRows.push(...visibleReceiptRows);
   receiptRows.sort((a,b)=> (a.timestamp||'').localeCompare(b.timestamp||''));
   const receiptsSectionHtml = receiptRows.length > 0 ? `
     <div class="subsection-title">📦 Receiving Log <span class="section-hint">(semua barang masuk periode ini)</span></div>
@@ -2103,6 +2191,11 @@ function populateCategorySelect(){
 
 function renderManageItemsList(){
   const wrap = document.getElementById('manageItemsList');
+  const unsetCount = state.items.filter(i=> !i.dept).length;
+  const hintEl = document.getElementById('deptUnsetHint');
+  if(hintEl) hintEl.textContent = unsetCount > 0
+    ? `${unsetCount} item belum diset departemennya — sementara tampil di semua departemen. Tap ✎ untuk menentukan.`
+    : '';
   wrap.innerHTML = '';
   state.categories.forEach(cat=>{
     const catItems = state.items.filter(i=>i.category===cat.id);
@@ -2112,7 +2205,7 @@ function renderManageItemsList(){
       row.innerHTML = `
         <div class="manage-info">
           <div class="manage-name">${escapeHtml(item.name)}</div>
-          <div class="manage-sub">${escapeHtml(cat.name)} · ${escapeHtml(item.unit)}${getItemType(item) !== 'consumable' ? ` · <span class="deleted-tag" style="color:var(--warn);">${getItemType(item)}</span>` : ''}</div>
+          <div class="manage-sub">${escapeHtml(cat.name)} · ${escapeHtml(item.unit)} · ${item.dept ? DEPT_LABELS[item.dept].replace('Semua departemen','semua dept') : '<span style="color:var(--warn);">dept belum diset</span>'}${getItemType(item) !== 'consumable' ? ` · <span class="deleted-tag" style="color:var(--warn);">${getItemType(item)}</span>` : ''}</div>
         </div>
         <div class="manage-actions">
           <button class="edit-btn" aria-label="Edit item">✎</button>
@@ -2141,6 +2234,12 @@ function toggleEditItemRow(row, item){
   form.innerHTML = `
     <input type="text" class="edit-name-input" value="${escapeHtml(item.name)}" placeholder="Item name">
     <input type="text" class="edit-unit-input" value="${escapeHtml(item.unit)}" placeholder="Unit">
+    <select class="edit-dept-input">
+      <option value="all" ${getItemDept(item)==='all'?'selected':''}>Dept: Semua</option>
+      <option value="service" ${getItemDept(item)==='service'?'selected':''}>Dept: Service</option>
+      <option value="kitchen" ${getItemDept(item)==='kitchen'?'selected':''}>Dept: Kitchen</option>
+      <option value="bar" ${getItemDept(item)==='bar'?'selected':''}>Dept: Bar</option>
+    </select>
     <select class="edit-type-input">
       <option value="consumable" ${getItemType(item)==='consumable'?'selected':''}>Type: Consumable</option>
       <option value="asset" ${getItemType(item)==='asset'?'selected':''}>Type: Asset (Broken/Lost)</option>
@@ -2158,6 +2257,7 @@ function toggleEditItemRow(row, item){
     const newName = form.querySelector('.edit-name-input').value.trim();
     const newUnit = form.querySelector('.edit-unit-input').value.trim();
     const newType = form.querySelector('.edit-type-input').value;
+    const newDept = form.querySelector('.edit-dept-input').value;
     if(!newName){ showToast('Item name cannot be empty'); return; }
     const ok = await saveConfig((cfg)=>{
       const target = cfg.items.find(i=>i.id===item.id);
@@ -2165,6 +2265,7 @@ function toggleEditItemRow(row, item){
         target.name = newName;
         target.unit = newUnit || target.unit;
         target.type = newType;
+        target.dept = newDept;
         delete target.isAsset; // superseded by type
       }
     });
@@ -2207,6 +2308,7 @@ async function addNewItem(){
   const catSelect = document.getElementById('newItemCategory');
   const freqSelect = document.getElementById('newItemFrequency');
   const typeSelect = document.getElementById('newItemType');
+  const deptSelect = document.getElementById('newItemDept');
   const name = nameInput.value.trim();
   if(!name){ showToast('Enter an item name first'); return; }
   if(state.categories.length === 0){ showToast('Add a category first'); return; }
@@ -2214,13 +2316,14 @@ async function addNewItem(){
   const category = catSelect.value;
   const frequency = freqSelect.value || 'daily';
   const type = typeSelect.value || 'consumable';
+  const dept = deptSelect.value || 'all';
   nameInput.value = '';
   unitInput.value = '';
   typeSelect.value = 'consumable';
 
   const ok = await saveConfig((cfg)=>{
     const id = slugify(name, cfg.items.map(i=>i.id));
-    cfg.items.push({ id, name, unit, category, frequency, type });
+    cfg.items.push({ id, name, unit, category, frequency, type, dept });
   });
   if(ok){
     showToast(`"${name}" added`);
@@ -2542,7 +2645,7 @@ async function exportDailyPDF(){
     const doc = new jsPDF({unit:'mm', format:'a4', orientation:'landscape'});
 
     const dateLabel = new Date(state.date+'T00:00:00').toLocaleDateString('en-GB', {weekday:'long', day:'2-digit', month:'long', year:'numeric'});
-    addPdfHeader(doc, 'Daily Consumption Report', `${dateLabel}  ·  Support Equipment Inventory`);
+    addPdfHeader(doc, 'Daily Consumption Report', `${dateLabel}  ·  Support Equipment Inventory${reportDept()!=='all' ? '  ·  Dept: '+DEPT_LABELS[reportDept()] : ''}`);
 
     let filled=0, low=0, ok=0;
     const reportItems = getReportItemList(state.entries);
@@ -2623,7 +2726,7 @@ async function exportWeeklyPDF(){
     const doc = new jsPDF({unit:'mm', format:'a4', orientation:'landscape'});
 
     const weekLabel = `${formatShort(dates[0])} – ${formatShort(dates[dates.length-1])} ${new Date(dates[dates.length-1]+'T00:00:00').getFullYear()}`;
-    addPdfHeader(doc, 'Weekly Consumption Report', `${weekLabel}  ·  Support Equipment Inventory`);
+    addPdfHeader(doc, 'Weekly Consumption Report', `${weekLabel}  ·  Support Equipment Inventory${reportDept()!=='all' ? '  ·  Dept: '+DEPT_LABELS[reportDept()] : ''}`);
 
     const staffRows = dates.map(dt=>{
       const dayEntries = dataByDate[dt] || {};
@@ -2825,6 +2928,16 @@ function bindStaticListeners(){
 
   document.getElementById('exportBtn').addEventListener('click', exportCSV);
 
+  document.querySelectorAll('#deptPicker .dept-option').forEach(b=>{
+    b.addEventListener('click', ()=> applyDeptChoice(b.dataset.dept));
+  });
+  document.getElementById('deptCancel').addEventListener('click', ()=> document.getElementById('deptPicker').classList.add('hidden'));
+  document.getElementById('deptChip').addEventListener('click', ()=> showDeptPicker(true));
+  document.getElementById('summaryDept').addEventListener('change', (e)=>{
+    state.summaryDept = e.target.value;
+    renderSummaryView();
+  });
+
   document.getElementById('receiptSave').addEventListener('click', saveReceiptFromModal);
   document.getElementById('receiptClose').addEventListener('click', closeReceiptModal);
   document.getElementById('receiptQty').addEventListener('keydown', (e)=>{ if(e.key === 'Enter') saveReceiptFromModal(); });
@@ -2884,6 +2997,56 @@ function bindStaticListeners(){
 
   document.getElementById('addItemBtn').addEventListener('click', addNewItem);
   document.getElementById('addCategoryBtn').addEventListener('click', addNewCategory);
+}
+
+// ---- Department picker ---------------------------------------------------
+const DEPT_STORAGE_KEY = 'inv_dept';
+
+function isValidDeptChoice(v){
+  if(v === 'service' || v === 'kitchen' || v === 'bar') return true;
+  return v === 'all' && state.userTier !== 'staff'; // "Semua" is for leaders and up
+}
+function loadStoredDept(){
+  try{
+    const v = localStorage.getItem(DEPT_STORAGE_KEY);
+    return isValidDeptChoice(v) ? v : null;
+  }catch(e){ return null; }
+}
+function saveStoredDept(v){
+  try{ localStorage.setItem(DEPT_STORAGE_KEY, v); }catch(e){ /* private mode etc: just don't remember */ }
+}
+
+function updateDeptChip(){
+  const chip = document.getElementById('deptChip');
+  if(!chip || !state.dept) return;
+  chip.textContent = (state.dept === 'all' ? 'Semua' : DEPT_LABELS[state.dept]) + ' ▾';
+  chip.classList.remove('hidden');
+}
+
+function showDeptPicker(canCancel){
+  const picker = document.getElementById('deptPicker');
+  document.getElementById('deptGreeting').textContent = state.staffName ? `Halo, ${state.staffName}!` : 'Pilih departemen';
+  document.getElementById('deptAllBtn').classList.toggle('hidden', state.userTier === 'staff');
+  document.getElementById('deptCancel').classList.toggle('hidden', !canCancel);
+  picker.querySelectorAll('.dept-option').forEach(b=> b.classList.toggle('current', b.dataset.dept === state.dept));
+  picker.classList.remove('hidden');
+}
+
+function applyDeptChoice(dept){
+  state.dept = dept;
+  state.summaryDept = dept;
+  saveStoredDept(dept);
+  document.getElementById('deptPicker').classList.add('hidden');
+  const sel = document.getElementById('summaryDept');
+  if(sel) sel.value = dept;
+  updateDeptChip();
+  // Don't render before the first load finishes: the empty-state shown while
+  // items are still loading must never be what someone taps through.
+  if(state.ready){
+    renderInputView();
+    const active = document.querySelector('nav.bottom button.active');
+    if(active && active.dataset.view === 'summary') renderSummaryView();
+  }
 }
 
 // ---- "Terima barang" popup --------------------------------------------
@@ -3021,6 +3184,16 @@ async function init(){
   // even if storage loading is slow or fails.
   bindStaticListeners();
 
+  const storedDept = loadStoredDept();
+  if(storedDept){
+    state.dept = storedDept;
+    state.summaryDept = storedDept;
+    document.getElementById('summaryDept').value = storedDept;
+    updateDeptChip();
+  }else{
+    showDeptPicker(false);
+  }
+
   document.getElementById('view-input').innerHTML = loadingHtml('Loading data...');
 
   try{
@@ -3033,6 +3206,7 @@ async function init(){
     console.error('Init load failed', e);
   }
 
+  state.ready = true;
   renderInputView();
 }
 
